@@ -82,6 +82,16 @@ export default function Admin() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
 
+      // Borrar asignaciones anteriores del mismo mes
+      const snapAsig = await getDocs(collection(db, "asignaciones"));
+      const borrar = snapAsig.docs.filter(d => {
+        const data = d.data();
+        return data.mes === mesProximo && data.anio === anioProximo;
+      });
+      for (const d of borrar) {
+        await deleteDoc(doc(db, "asignaciones", d.id));
+      }
+
       const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial);
       const inscKey = `${anioProximo}-${mesProximo}`;
 
