@@ -5,7 +5,7 @@ import {
   collection, getDocs, deleteDoc, doc, setDoc, getDoc
 } from "firebase/firestore";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { distribuir } from "../utils/distribucion";
+import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
 
 export default function Admin() {
@@ -24,6 +24,7 @@ export default function Admin() {
   const [seccion, setSeccion] = useState("empleados");
   const [distribuyendo, setDistribuyendo] = useState(false);
   const [mensajeDistribucion, setMensajeDistribucion] = useState("");
+  const [mobile, setMobile] = useState(window.innerWidth < 640);
 
   const ahora = new Date();
   const mes = ahora.getMonth() + 1;
@@ -32,6 +33,12 @@ export default function Admin() {
   const anioProximo = mes === 12 ? anio + 1 : anio;
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
+
+  useEffect(() => {
+    const handleResize = () => setMobile(window.innerWidth < 640);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     cargarEmpleados();
@@ -75,26 +82,32 @@ export default function Admin() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
 
-      for (const quincena of [1, 2]) {
-        const inscKey = `${anioProximo}-${mesProximo}`;
-        const { asignaciones, descartados } = distribuir(
-          inscriptos, anioProximo, mesProximo, quincena, historial
-        );
-        for (const [empleadoId, dias] of Object.entries(asignaciones)) {
-          const key = `${empleadoId}_${inscKey}_q${quincena}`;
-          await setDoc(doc(db, "asignaciones", key), {
-            empleadoId, mes: mesProximo, anio: anioProximo, quincena, dias,
-          });
-        }
-        for (const desc of descartados) {
-          const actual = historial[desc.empleadoId] || 0;
-          await setDoc(
-            doc(db, "empleados", desc.empleadoId),
-            { historialDescartes: actual + 1 },
-            { merge: true }
-          );
-        }
+      const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial);
+      const inscKey = `${anioProximo}-${mesProximo}`;
+
+      const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1);
+      for (const [empleadoId, dias] of Object.entries(asignacionesQ1)) {
+        await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q1`), {
+          empleadoId, mes: mesProximo, anio: anioProximo, quincena: 1, dias,
+        });
       }
+
+      const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2);
+      for (const [empleadoId, dias] of Object.entries(asignacionesQ2)) {
+        await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q2`), {
+          empleadoId, mes: mesProximo, anio: anioProximo, quincena: 2, dias,
+        });
+      }
+
+      for (const desc of [...q1.descartados, ...q2.descartados]) {
+        const actual = historial[desc.empleadoId] || 0;
+        await setDoc(
+          doc(db, "empleados", desc.empleadoId),
+          { historialDescartes: actual + 1 },
+          { merge: true }
+        );
+      }
+
       setMensajeDistribucion("✓ Distribución generada correctamente");
     } catch (err) {
       setMensajeDistribucion("Error: " + err.message);
@@ -177,17 +190,17 @@ export default function Admin() {
   };
 
   const labelTab = (s) => {
-    if (s === "empleados") return "Empleados";
-    if (s === "inscripciones") return `Inscripciones — ${nombreMes}`;
-    return "Calendario";
+    if (s === "empleados") return "👥 Empleados";
+    if (s === "inscripciones") return "📋 Inscripciones";
+    return "📅 Calendario";
   };
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.title}>solAPPe — Admin</h1>
+        <h1 style={styles.title}>solAPPe {mobile ? "" : "— Admin"}</h1>
         <button style={styles.logout} onClick={() => signOut(auth)}>
-          Cerrar sesión
+          {mobile ? "Salir" : "Cerrar sesión"}
         </button>
       </div>
 
@@ -209,14 +222,14 @@ export default function Admin() {
           <>
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>Agregar empleado</h2>
-              <div style={styles.grid}>
+              <div style={{ ...styles.grid, gridTemplateColumns: mobile ? "1fr" : "1fr 1fr" }}>
                 <input style={styles.input} placeholder="Nombre" value={nombre} onChange={e => setNombre(e.target.value)} />
                 <input style={styles.input} placeholder="Apellido" value={apellido} onChange={e => setApellido(e.target.value)} />
                 <input style={styles.input} placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
                 <input style={styles.input} placeholder="Contraseña inicial" type="password" value={password} onChange={e => setPassword(e.target.value)} />
               </div>
               {mensaje && <p style={styles.mensajeOk}>{mensaje}</p>}
-              <button style={styles.boton} onClick={agregarEmpleado} disabled={loading}>
+              <button style={{ ...styles.boton, width: mobile ? "100%" : "auto" }} onClick={agregarEmpleado} disabled={loading}>
                 {loading ? "Creando..." : "Crear empleado"}
               </button>
             </div>
@@ -225,11 +238,17 @@ export default function Admin() {
               <h2 style={styles.cardTitle}>Empleados ({empleados.length})</h2>
               {empleados.length === 0 && <p style={{ color: "#999" }}>No hay empleados cargados</p>}
               {empleados.map(e => (
-                <div key={e.id} style={styles.empleadoRow}>
+                <div key={e.id} style={{
+                  ...styles.empleadoRow,
+                  flexDirection: mobile ? "column" : "row",
+                  alignItems: mobile ? "flex-start" : "center",
+                  gap: mobile ? 8 : 0,
+                }}>
                   <div>
                     <span style={styles.empleadoNombre}>{e.apellido}, {e.nombre}</span>
-                    <span style={styles.empleadoEmail}> — {e.email}</span>
+                    {!mobile && <span style={styles.empleadoEmail}> — {e.email}</span>}
                     {e.esAdmin && <span style={styles.badgeAdmin}>ADMIN</span>}
+                    {mobile && <div style={styles.empleadoEmail}>{e.email}</div>}
                   </div>
                   <div style={styles.rowBotones}>
                     <button style={styles.botonSecundario} onClick={() => hacerAdmin(e.id, e.esAdmin)}>
@@ -249,7 +268,7 @@ export default function Admin() {
           <>
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>Estado de la inscripción</h2>
-              <div style={styles.estadoRow}>
+              <div style={{ ...styles.estadoRow, flexDirection: mobile ? "column" : "row", alignItems: mobile ? "stretch" : "center" }}>
                 <div style={{
                   ...styles.estadoBadge,
                   background: inscripcionAbierta ? "#eafaf1" : "#fdf2f2",
@@ -259,7 +278,7 @@ export default function Admin() {
                   {inscripcionAbierta ? "🟢 Inscripción ABIERTA" : "🔴 Inscripción CERRADA"}
                 </div>
                 <button
-                  style={{ ...styles.boton, background: inscripcionAbierta ? "#c0392b" : "#27ae60" }}
+                  style={{ ...styles.boton, background: inscripcionAbierta ? "#c0392b" : "#27ae60", width: mobile ? "100%" : "auto" }}
                   onClick={toggleInscripcion}
                 >
                   {inscripcionAbierta ? "Cerrar inscripción" : "Abrir inscripción"}
@@ -267,11 +286,9 @@ export default function Admin() {
               </div>
               {!inscripcionAbierta && (
                 <div style={{ marginTop: 16 }}>
-                  {mensajeDistribucion && (
-                    <p style={styles.mensajeOk}>{mensajeDistribucion}</p>
-                  )}
+                  {mensajeDistribucion && <p style={styles.mensajeOk}>{mensajeDistribucion}</p>}
                   <button
-                    style={{ ...styles.boton, background: "#1a1a2e", marginTop: 8 }}
+                    style={{ ...styles.boton, background: "#1a1a2e", marginTop: 8, width: mobile ? "100%" : "auto" }}
                     onClick={ejecutarDistribucion}
                     disabled={distribuyendo}
                   >
@@ -283,7 +300,7 @@ export default function Admin() {
 
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>Inscribir empleado</h2>
-              <div style={styles.grid}>
+              <div style={{ ...styles.grid, gridTemplateColumns: mobile ? "1fr" : "1fr 1fr" }}>
                 <select style={styles.input} value={empSeleccionado} onChange={e => setEmpSeleccionado(e.target.value)}>
                   <option value="">Seleccioná un empleado</option>
                   {empleados.map(e => (
@@ -298,7 +315,7 @@ export default function Admin() {
                 </select>
               </div>
               {mensajeInsc && <p style={styles.mensajeOk}>{mensajeInsc}</p>}
-              <button style={styles.boton} onClick={inscribirEmpleado}>
+              <button style={{ ...styles.boton, width: mobile ? "100%" : "auto" }} onClick={inscribirEmpleado}>
                 Inscribir
               </button>
             </div>
@@ -307,7 +324,12 @@ export default function Admin() {
               <h2 style={styles.cardTitle}>Inscriptos ({inscripciones.length})</h2>
               {inscripciones.length === 0 && <p style={{ color: "#999" }}>Nadie inscripto todavía</p>}
               {inscripciones.map(i => (
-                <div key={i.id} style={styles.empleadoRow}>
+                <div key={i.id} style={{
+                  ...styles.empleadoRow,
+                  flexDirection: mobile ? "column" : "row",
+                  alignItems: mobile ? "flex-start" : "center",
+                  gap: mobile ? 8 : 0,
+                }}>
                   <div>
                     <span style={styles.empleadoNombre}>{i.apellido}, {i.nombre}</span>
                     <span style={styles.empleadoEmail}> — {labelPreferencia(i.preferencia)}</span>
@@ -335,34 +357,36 @@ export default function Admin() {
 const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
   header: {
-    background: "#c0392b", color: "white", padding: "16px 24px",
+    background: "#c0392b", color: "white", padding: "12px 16px",
     display: "flex", justifyContent: "space-between", alignItems: "center",
   },
-  title: { fontSize: 22, fontWeight: 800 },
+  title: { fontSize: 20, fontWeight: 800 },
   logout: {
     background: "transparent", border: "1px solid white", color: "white",
-    padding: "8px 16px", borderRadius: 8, fontSize: 14,
+    padding: "6px 12px", borderRadius: 8, fontSize: 13,
   },
   tabs: {
     display: "flex", background: "white",
-    borderBottom: "2px solid #f0f2f5", padding: "0 24px",
+    borderBottom: "2px solid #f0f2f5", padding: "0 8px",
+    overflowX: "auto",
   },
   tab: {
-    padding: "14px 20px", border: "none", background: "transparent",
-    fontSize: 15, color: "#666", borderBottom: "3px solid transparent",
-    marginBottom: -2,
+    padding: "12px 14px", border: "none", background: "transparent",
+    fontSize: 13, color: "#666", borderBottom: "3px solid transparent",
+    marginBottom: -2, whiteSpace: "nowrap",
   },
   tabActivo: { color: "#c0392b", fontWeight: 700, borderBottom: "3px solid #c0392b" },
-  content: { padding: 24, maxWidth: 1000, margin: "0 auto" },
+  content: { padding: 16, maxWidth: 1000, margin: "0 auto" },
   card: {
-    background: "white", borderRadius: 12, padding: 24, marginBottom: 24,
+    background: "white", borderRadius: 12, padding: 16, marginBottom: 16,
     boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
   },
-  cardTitle: { fontSize: 18, fontWeight: 700, marginBottom: 16, color: "#1a1a2e" },
+  cardTitle: { fontSize: 16, fontWeight: 700, marginBottom: 14, color: "#1a1a2e" },
   grid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 },
   input: {
     padding: "10px 14px", borderRadius: 8, border: "1px solid #ddd",
     fontSize: 15, outline: "none", background: "white", color: "#1a1a2e",
+    width: "100%", boxSizing: "border-box",
   },
   boton: {
     background: "#c0392b", color: "white", border: "none",
@@ -378,16 +402,16 @@ const styles = {
   },
   mensajeOk: { marginBottom: 12, color: "#27ae60", fontWeight: 500 },
   empleadoRow: {
-    display: "flex", justifyContent: "space-between", alignItems: "center",
+    display: "flex", justifyContent: "space-between",
     padding: "12px 0", borderBottom: "1px solid #f0f2f5",
   },
-  empleadoNombre: { fontWeight: 600, fontSize: 15 },
-  empleadoEmail: { color: "#666", fontSize: 14 },
+  empleadoNombre: { fontWeight: 600, fontSize: 14 },
+  empleadoEmail: { color: "#666", fontSize: 13 },
   badgeAdmin: {
     background: "#c0392b", color: "white", fontSize: 11, fontWeight: 700,
     padding: "2px 8px", borderRadius: 4, marginLeft: 8,
   },
   rowBotones: { display: "flex", gap: 8 },
   estadoRow: { display: "flex", alignItems: "center", gap: 16 },
-  estadoBadge: { padding: "10px 16px", borderRadius: 8, fontWeight: 600, fontSize: 15 },
+  estadoBadge: { padding: "10px 16px", borderRadius: 8, fontWeight: 600, fontSize: 14, flex: 1 },
 };

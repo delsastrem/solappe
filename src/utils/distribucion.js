@@ -16,8 +16,7 @@ const CICLO = [
   { turno: "franco" },
 ];
 
-// 1ro de abril 2026 = día 0 del ciclo
-const INICIO_CICLO = new Date(2026, 3, 1);
+const INICIO_CICLO = new Date(2026, 3, 1); // 1ro de abril 2026
 
 export function getTurnoParaDia(fecha) {
   const diff = Math.floor((fecha - INICIO_CICLO) / (1000 * 60 * 60 * 24));
@@ -43,47 +42,67 @@ export function getRequerimiento(turno) {
   return turno === "tarde" ? 3 : 4;
 }
 
-export function distribuir(inscriptos, anio, mes, quincena, historialDescartes) {
+// Función principal que balancea AMBAS quincenas juntas antes de distribuir
+export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescartes) {
   const MAX_POR_QUINCENA = 10;
 
-  // Separar por preferencia
-  const soloEsta = inscriptos.filter(e =>
-    e.preferencia === `q${quincena}`
-  );
-  const ambos = inscriptos.filter(e => e.preferencia === "ambas");
-  const pool = [...soloEsta, ...ambos];
+  const soloQ1 = inscriptos.filter(e => e.preferencia === "q1");
+  const soloQ2 = inscriptos.filter(e => e.preferencia === "q2");
+  const ambos  = inscriptos.filter(e => e.preferencia === "ambas");
 
-  // Seleccionar hasta MAX con descarte justo
-  let seleccionados = [];
-  let descartados = [];
+  // Balancear: asignar los "ambos" para equilibrar las quincenas
+  const asignadosQ1 = [...soloQ1];
+  const asignadosQ2 = [...soloQ2];
 
-  if (pool.length <= MAX_POR_QUINCENA) {
-    seleccionados = pool;
-  } else {
-    const sorted = [...pool].sort((a, b) => {
-      const da = historialDescartes[a.empleadoId] || 0;
-      const db = historialDescartes[b.empleadoId] || 0;
-      return da - db;
-    });
-    seleccionados = sorted.slice(0, MAX_POR_QUINCENA);
-    descartados = sorted.slice(MAX_POR_QUINCENA);
+  // Ordenar ambos por historial de descartes (menos descartes = más prioridad)
+  const ambosOrdenados = [...ambos].sort((a, b) => {
+    const da = historialDescartes[a.empleadoId] || 0;
+    const db = historialDescartes[b.empleadoId] || 0;
+    return da - db;
+  });
+
+  // Ir asignando uno a uno al que tenga menos gente
+  for (const emp of ambosOrdenados) {
+    if (asignadosQ1.length <= asignadosQ2.length) {
+      asignadosQ1.push({ ...emp, preferencia: "q1" });
+    } else {
+      asignadosQ2.push({ ...emp, preferencia: "q2" });
+    }
   }
 
-  // Obtener días laborables de la quincena
-  const dias = getDiasQuincena(anio, mes, quincena);
+  // Aplicar máximo y descarte justo para cada quincena
+  const aplicarMaximo = (lista, historial) => {
+    if (lista.length <= MAX_POR_QUINCENA) return { seleccionados: lista, descartados: [] };
+    const sorted = [...lista].sort((a, b) => {
+      const da = historial[a.empleadoId] || 0;
+      const db = historial[b.empleadoId] || 0;
+      return da - db;
+    });
+    return {
+      seleccionados: sorted.slice(0, MAX_POR_QUINCENA),
+      descartados: sorted.slice(MAX_POR_QUINCENA),
+    };
+  };
 
-  // Inicializar asignaciones
+  const { seleccionados: selQ1, descartados: descQ1 } = aplicarMaximo(asignadosQ1, historialDescartes);
+  const { seleccionados: selQ2, descartados: descQ2 } = aplicarMaximo(asignadosQ2, historialDescartes);
+
+  return {
+    q1: { seleccionados: selQ1, descartados: descQ1 },
+    q2: { seleccionados: selQ2, descartados: descQ2 },
+  };
+}
+
+export function distribuir(seleccionados, anio, mes, quincena) {
+  const dias = getDiasQuincena(anio, mes, quincena);
   const asignaciones = {};
   seleccionados.forEach(e => { asignaciones[e.empleadoId] = []; });
 
-  // Agrupar días por turno
   const diasPorTurno = { mañana: [], noche: [], tarde: [] };
   dias.forEach(d => {
     if (diasPorTurno[d.turno]) diasPorTurno[d.turno].push(d);
   });
 
-  // Para cada día de cada turno, asignar los N empleados requeridos
-  // priorizando quien tiene menos asignaciones totales y menos de ese turno
   Object.entries(diasPorTurno).forEach(([turno, diasTurno]) => {
     const req = getRequerimiento(turno);
     diasTurno.forEach(dia => {
@@ -105,5 +124,5 @@ export function distribuir(inscriptos, anio, mes, quincena, historialDescartes) 
     });
   });
 
-  return { asignaciones, descartados, seleccionados };
+  return asignaciones;
 }
