@@ -14,3 +14,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Segunda instancia solo para crear usuarios sin afectar la sesión actual
+const appSecundaria = initializeApp(firebaseConfig, "secundaria");
+export const authSecundaria = getAuth(appSecundaria);

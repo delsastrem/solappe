@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { signOut } from "firebase/auth";
-import { auth, db } from "../firebase";
+import { auth, db, authSecundaria } from "../firebase";
 import {
   collection, getDocs, deleteDoc, doc, setDoc, getDoc
 } from "firebase/firestore";
@@ -82,7 +82,6 @@ export default function Admin() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
 
-      // Borrar asignaciones anteriores del mismo mes
       const snapAsig = await getDocs(collection(db, "asignaciones"));
       const borrar = snapAsig.docs.filter(d => {
         const data = d.data();
@@ -139,7 +138,7 @@ export default function Admin() {
     setLoading(true);
     setMensaje("");
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      const cred = await createUserWithEmailAndPassword(authSecundaria, email, password);
       await setDoc(doc(db, "empleados", cred.user.uid), {
         nombre, apellido, email, esAdmin: false,
         historialDescartes: 0, creadoEn: new Date().toISOString(),
