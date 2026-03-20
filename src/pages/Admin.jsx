@@ -31,6 +31,8 @@ export default function Admin() {
   const [mensajePass, setMensajePass] = useState("");
   const [loadingPass, setLoadingPass] = useState(false);
   const [empleadoActual, setEmpleadoActual] = useState(null);
+  const [resumenQ1, setResumenQ1] = useState([]);
+  const [resumenQ2, setResumenQ2] = useState([]);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -53,6 +55,10 @@ export default function Admin() {
     cargarInscripciones();
     cargarEmpleadoActual();
   }, []);
+
+  useEffect(() => {
+    if (seccion === "resumen") cargarResumen();
+  }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
     if (!user) return;
@@ -78,6 +84,43 @@ export default function Admin() {
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(i => i.mes === mesProximo && i.anio === anioProximo);
     setInscripciones(lista);
+  };
+
+  const cargarResumen = async () => {
+    const snap = await getDocs(collection(db, "asignaciones"));
+    const asigs = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(a => a.mes === mesProximo && a.anio === anioProximo);
+
+    const mapaEmpleados = {};
+    empleados.forEach(e => { mapaEmpleados[e.id] = e; });
+
+    const q1 = asigs
+      .filter(a => a.quincena === 1)
+      .map(a => {
+        const emp = mapaEmpleados[a.empleadoId];
+        return {
+          nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId,
+          dias: a.dias.length,
+          detalle: a.dias,
+        };
+      })
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+    const q2 = asigs
+      .filter(a => a.quincena === 2)
+      .map(a => {
+        const emp = mapaEmpleados[a.empleadoId];
+        return {
+          nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId,
+          dias: a.dias.length,
+          detalle: a.dias,
+        };
+      })
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+    setResumenQ1(q1);
+    setResumenQ2(q2);
   };
 
   const ejecutarDistribucion = async () => {
@@ -247,8 +290,49 @@ export default function Admin() {
     if (s === "empleados") return "👥 Empleados";
     if (s === "inscripciones") return "📋 Inscripciones";
     if (s === "calendario") return "📅 Calendario";
+    if (s === "resumen") return "📊 Resumen";
     return "🔑 Mi cuenta";
   };
+
+  const COLORES_TURNO = {
+    mañana: { bg: "#fff8e1", text: "#856404" },
+    tarde:  { bg: "#e8f5e9", text: "#1e8449" },
+    noche:  { bg: "#e8eaf6", text: "#283593" },
+  };
+
+  const renderColumnaResumen = (lista, titulo, quincena) => (
+    <div style={styles.resumenCol}>
+      <div style={styles.resumenHeader}>
+        <h3 style={styles.resumenTitulo}>{titulo}</h3>
+        <span style={styles.resumenCount}>{lista.length} personas</span>
+      </div>
+      {lista.length === 0 ? (
+        <p style={{ color: "#999", fontSize: 13, padding: 12 }}>
+          Sin distribución generada
+        </p>
+      ) : (
+        lista.map((emp, i) => (
+          <div key={i} style={styles.resumenFila}>
+            <div style={styles.resumenNombre}>{emp.nombre}</div>
+            <div style={styles.resumenDias}>
+              {emp.detalle.map((d, j) => {
+                const color = COLORES_TURNO[d.turno] || { bg: "#f5f5f5", text: "#333" };
+                return (
+                  <span key={j} style={{
+                    ...styles.resumenChip,
+                    background: color.bg,
+                    color: color.text,
+                  }}>
+                    {d.label} {d.turno === "mañana" ? "☀️" : d.turno === "tarde" ? "🌅" : "🌙"}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
 
   return (
     <div style={styles.container}>
@@ -260,7 +344,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "calendario", "cuenta"].map(s => (
+        {["empleados", "inscripciones", "resumen", "calendario", "cuenta"].map(s => (
           <button
             key={s}
             style={{ ...styles.tab, ...(seccion === s ? styles.tabActivo : {}) }}
@@ -398,6 +482,28 @@ export default function Admin() {
           </>
         )}
 
+        {seccion === "resumen" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>
+              Resumen de distribución — {nombreMes} {anioProximo}
+            </h2>
+            {resumenQ1.length === 0 && resumenQ2.length === 0 ? (
+              <div style={styles.aviso}>
+                📊 Todavía no se generó la distribución para este mes.
+              </div>
+            ) : (
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: mobile ? "1fr" : "1fr 1fr",
+                gap: 16,
+              }}>
+                {renderColumnaResumen(resumenQ1, "1ra Quincena (1-15)", 1)}
+                {renderColumnaResumen(resumenQ2, "2da Quincena (16-fin)", 2)}
+              </div>
+            )}
+          </div>
+        )}
+
         {seccion === "calendario" && (
           <div style={styles.card}>
             <Calendario esAdmin={true} />
@@ -413,32 +519,11 @@ export default function Admin() {
               </p>
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Contraseña actual"
-                value={passActual}
-                onChange={e => setPassActual(e.target.value)}
-              />
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Nueva contraseña"
-                value={passNueva}
-                onChange={e => setPassNueva(e.target.value)}
-              />
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Repetir nueva contraseña"
-                value={passConfirm}
-                onChange={e => setPassConfirm(e.target.value)}
-              />
+              <input style={styles.input} type="password" placeholder="Contraseña actual" value={passActual} onChange={e => setPassActual(e.target.value)} />
+              <input style={styles.input} type="password" placeholder="Nueva contraseña" value={passNueva} onChange={e => setPassNueva(e.target.value)} />
+              <input style={styles.input} type="password" placeholder="Repetir nueva contraseña" value={passConfirm} onChange={e => setPassConfirm(e.target.value)} />
               {mensajePass && (
-                <p style={{
-                  color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c",
-                  fontWeight: 500, fontSize: 14,
-                }}>
+                <p style={{ color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c", fontWeight: 500, fontSize: 14 }}>
                   {mensajePass}
                 </p>
               )}
@@ -501,6 +586,10 @@ const styles = {
     padding: "6px 12px", borderRadius: 6, fontSize: 13,
   },
   mensajeOk: { marginBottom: 12, color: "#27ae60", fontWeight: 500 },
+  aviso: {
+    background: "#fef9e7", border: "1px solid #f39c12",
+    borderRadius: 8, padding: 16, color: "#856404", fontSize: 15,
+  },
   empleadoRow: {
     display: "flex", justifyContent: "space-between",
     padding: "12px 0", borderBottom: "1px solid #f0f2f5",
@@ -514,4 +603,25 @@ const styles = {
   rowBotones: { display: "flex", gap: 8 },
   estadoRow: { display: "flex", alignItems: "center", gap: 16 },
   estadoBadge: { padding: "10px 16px", borderRadius: 8, fontWeight: 600, fontSize: 14, flex: 1 },
+  resumenCol: {
+    border: "1px solid #eee", borderRadius: 10, overflow: "hidden",
+  },
+  resumenHeader: {
+    background: "#f0f2f5", padding: "10px 14px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    borderBottom: "1px solid #eee",
+  },
+  resumenTitulo: { fontSize: 14, fontWeight: 700, color: "#1a1a2e" },
+  resumenCount: {
+    background: "#1a1a2e", color: "white", fontSize: 12,
+    padding: "2px 8px", borderRadius: 12, fontWeight: 600,
+  },
+  resumenFila: {
+    padding: "10px 14px", borderBottom: "1px solid #f5f5f5",
+  },
+  resumenNombre: { fontWeight: 600, fontSize: 14, color: "#1a1a2e", marginBottom: 6 },
+  resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
+  resumenChip: {
+    fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500,
+  },
 };
