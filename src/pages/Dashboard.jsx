@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { signOut } from "firebase/auth";
+import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
 import Calendario from "./Calendario";
@@ -12,6 +12,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [inscripcionAbierta, setInscripcionAbierta] = useState(false);
   const [seccion, setSeccion] = useState("inscripcion");
+  const [passActual, setPassActual] = useState("");
+  const [passNueva, setPassNueva] = useState("");
+  const [passConfirm, setPassConfirm] = useState("");
+  const [mensajePass, setMensajePass] = useState("");
+  const [loadingPass, setLoadingPass] = useState(false);
+  const [mobile, setMobile] = useState(window.innerWidth < 640);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -21,6 +27,12 @@ export default function Dashboard() {
   const anioProximo = mes === 12 ? anio + 1 : anio;
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
+
+  useEffect(() => {
+    const handleResize = () => setMobile(window.innerWidth < 640);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     cargarDatos();
@@ -68,6 +80,39 @@ export default function Dashboard() {
     setMensaje("Inscripción cancelada");
   };
 
+  const cambiarPassword = async () => {
+    if (!passActual || !passNueva || !passConfirm) {
+      setMensajePass("Completá todos los campos");
+      return;
+    }
+    if (passNueva !== passConfirm) {
+      setMensajePass("Las contraseñas nuevas no coinciden");
+      return;
+    }
+    if (passNueva.length < 6) {
+      setMensajePass("La contraseña nueva debe tener al menos 6 caracteres");
+      return;
+    }
+    setLoadingPass(true);
+    setMensajePass("");
+    try {
+      const credential = EmailAuthProvider.credential(user.email, passActual);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, passNueva);
+      setMensajePass("✓ Contraseña actualizada correctamente");
+      setPassActual("");
+      setPassNueva("");
+      setPassConfirm("");
+    } catch (err) {
+      if (err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        setMensajePass("La contraseña actual es incorrecta");
+      } else {
+        setMensajePass("Error: " + err.message);
+      }
+    }
+    setLoadingPass(false);
+  };
+
   const labelPreferencia = (p) => {
     if (p === "q1") return "Primera quincena (1-15)";
     if (p === "q2") return "Segunda quincena (16-fin)";
@@ -75,30 +120,36 @@ export default function Dashboard() {
     return p;
   };
 
+  const labelTab = (s) => {
+    if (s === "inscripcion") return `📋 ${mobile ? "Inscripción" : `Inscripción — ${nombreMes}`}`;
+    if (s === "calendario") return "📅 Calendario";
+    return "🔑 Mi cuenta";
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <h1 style={styles.title}>solAPPe</h1>
         <div style={styles.headerRight}>
-          {empleado && (
+          {empleado && !mobile && (
             <span style={styles.bienvenida}>
               {empleado.apellido}, {empleado.nombre}
             </span>
           )}
           <button style={styles.logout} onClick={() => signOut(auth)}>
-            Cerrar sesión
+            {mobile ? "Salir" : "Cerrar sesión"}
           </button>
         </div>
       </div>
 
       <div style={styles.tabs}>
-        {["inscripcion", "calendario"].map(s => (
+        {["inscripcion", "calendario", "cuenta"].map(s => (
           <button
             key={s}
             style={{ ...styles.tab, ...(seccion === s ? styles.tabActivo : {}) }}
             onClick={() => setSeccion(s)}
           >
-            {s === "inscripcion" ? `Inscripción — ${nombreMes}` : "Calendario"}
+            {labelTab(s)}
           </button>
         ))}
       </div>
@@ -136,11 +187,7 @@ export default function Dashboard() {
                   ))}
                 </div>
                 {mensaje && <p style={styles.mensaje}>{mensaje}</p>}
-                <button
-                  style={styles.boton}
-                  onClick={inscribirse}
-                  disabled={loading}
-                >
+                <button style={styles.boton} onClick={inscribirse} disabled={loading}>
                   {loading ? "Guardando..." : "Confirmar inscripción"}
                 </button>
               </div>
@@ -175,6 +222,51 @@ export default function Dashboard() {
           </div>
         )}
 
+        {seccion === "cuenta" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>Cambiar contraseña</h2>
+            {empleado && (
+              <p style={{ color: "#666", marginBottom: 16, fontSize: 14 }}>
+                Usuario: <strong>{empleado.apellido}, {empleado.nombre}</strong>
+              </p>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Contraseña actual"
+                value={passActual}
+                onChange={e => setPassActual(e.target.value)}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Nueva contraseña"
+                value={passNueva}
+                onChange={e => setPassNueva(e.target.value)}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Repetir nueva contraseña"
+                value={passConfirm}
+                onChange={e => setPassConfirm(e.target.value)}
+              />
+              {mensajePass && (
+                <p style={{
+                  color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c",
+                  fontWeight: 500, fontSize: 14,
+                }}>
+                  {mensajePass}
+                </p>
+              )}
+              <button style={styles.boton} onClick={cambiarPassword} disabled={loadingPass}>
+                {loadingPass ? "Guardando..." : "Cambiar contraseña"}
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -183,32 +275,33 @@ export default function Dashboard() {
 const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
   header: {
-    background: "#1a1a2e", color: "white", padding: "16px 24px",
+    background: "#1a1a2e", color: "white", padding: "12px 16px",
     display: "flex", justifyContent: "space-between", alignItems: "center",
   },
-  title: { fontSize: 22, fontWeight: 800 },
-  headerRight: { display: "flex", alignItems: "center", gap: 16 },
+  title: { fontSize: 20, fontWeight: 800 },
+  headerRight: { display: "flex", alignItems: "center", gap: 12 },
   bienvenida: { fontSize: 14, opacity: 0.85 },
   logout: {
     background: "transparent", border: "1px solid white", color: "white",
-    padding: "8px 16px", borderRadius: 8, fontSize: 14,
+    padding: "6px 12px", borderRadius: 8, fontSize: 13,
   },
   tabs: {
     display: "flex", background: "white",
-    borderBottom: "2px solid #f0f2f5", padding: "0 24px",
+    borderBottom: "2px solid #f0f2f5", padding: "0 8px",
+    overflowX: "auto",
   },
   tab: {
-    padding: "14px 20px", border: "none", background: "transparent",
-    fontSize: 15, color: "#666", borderBottom: "3px solid transparent",
-    marginBottom: -2,
+    padding: "12px 14px", border: "none", background: "transparent",
+    fontSize: 13, color: "#666", borderBottom: "3px solid transparent",
+    marginBottom: -2, whiteSpace: "nowrap",
   },
   tabActivo: { color: "#1a1a2e", fontWeight: 700, borderBottom: "3px solid #1a1a2e" },
-  content: { padding: 24, maxWidth: 1000, margin: "0 auto" },
+  content: { padding: 16, maxWidth: 1000, margin: "0 auto" },
   card: {
-    background: "white", borderRadius: 12, padding: 24, marginBottom: 24,
+    background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
     boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
   },
-  cardTitle: { fontSize: 18, fontWeight: 700, marginBottom: 16, color: "#1a1a2e" },
+  cardTitle: { fontSize: 17, fontWeight: 700, marginBottom: 16, color: "#1a1a2e" },
   aviso: {
     background: "#fef9e7", border: "1px solid #f39c12",
     borderRadius: 8, padding: 16, color: "#856404", fontSize: 15,
@@ -238,4 +331,9 @@ const styles = {
   inscriptoTexto: { color: "#1e8449", fontWeight: 600, fontSize: 15 },
   inscriptoFecha: { color: "#666", fontSize: 13, marginTop: 4 },
   mensaje: { marginTop: 12, color: "#27ae60", fontWeight: 500 },
+  input: {
+    padding: "10px 14px", borderRadius: 8, border: "1px solid #ddd",
+    fontSize: 15, outline: "none", background: "white", color: "#1a1a2e",
+    width: "100%", boxSizing: "border-box",
+  },
 };
