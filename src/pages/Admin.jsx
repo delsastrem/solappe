@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { signOut } from "firebase/auth";
+import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db, authSecundaria } from "../firebase";
 import {
   collection, getDocs, deleteDoc, doc, setDoc, getDoc
@@ -25,7 +25,14 @@ export default function Admin() {
   const [distribuyendo, setDistribuyendo] = useState(false);
   const [mensajeDistribucion, setMensajeDistribucion] = useState("");
   const [mobile, setMobile] = useState(window.innerWidth < 640);
+  const [passActual, setPassActual] = useState("");
+  const [passNueva, setPassNueva] = useState("");
+  const [passConfirm, setPassConfirm] = useState("");
+  const [mensajePass, setMensajePass] = useState("");
+  const [loadingPass, setLoadingPass] = useState(false);
+  const [empleadoActual, setEmpleadoActual] = useState(null);
 
+  const user = auth.currentUser;
   const ahora = new Date();
   const mes = ahora.getMonth() + 1;
   const anio = ahora.getFullYear();
@@ -44,7 +51,14 @@ export default function Admin() {
     cargarEmpleados();
     cargarEstadoInscripcion();
     cargarInscripciones();
+    cargarEmpleadoActual();
   }, []);
+
+  const cargarEmpleadoActual = async () => {
+    if (!user) return;
+    const snap = await getDoc(doc(db, "empleados", user.uid));
+    if (snap.exists()) setEmpleadoActual(snap.data());
+  };
 
   const cargarEmpleados = async () => {
     const snap = await getDocs(collection(db, "empleados"));
@@ -191,6 +205,37 @@ export default function Admin() {
     cargarInscripciones();
   };
 
+  const cambiarPassword = async () => {
+    if (!passActual || !passNueva || !passConfirm) {
+      setMensajePass("Completá todos los campos");
+      return;
+    }
+    if (passNueva !== passConfirm) {
+      setMensajePass("Las contraseñas nuevas no coinciden");
+      return;
+    }
+    if (passNueva.length < 6) {
+      setMensajePass("La contraseña nueva debe tener al menos 6 caracteres");
+      return;
+    }
+    setLoadingPass(true);
+    setMensajePass("");
+    try {
+      const credential = EmailAuthProvider.credential(user.email, passActual);
+      await reauthenticateWithCredential(user, credential);
+      await updatePassword(user, passNueva);
+      setMensajePass("✓ Contraseña actualizada correctamente");
+      setPassActual(""); setPassNueva(""); setPassConfirm("");
+    } catch (err) {
+      if (err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        setMensajePass("La contraseña actual es incorrecta");
+      } else {
+        setMensajePass("Error: " + err.message);
+      }
+    }
+    setLoadingPass(false);
+  };
+
   const labelPreferencia = (p) => {
     if (p === "q1") return "1ra quincena";
     if (p === "q2") return "2da quincena";
@@ -201,7 +246,8 @@ export default function Admin() {
   const labelTab = (s) => {
     if (s === "empleados") return "👥 Empleados";
     if (s === "inscripciones") return "📋 Inscripciones";
-    return "📅 Calendario";
+    if (s === "calendario") return "📅 Calendario";
+    return "🔑 Mi cuenta";
   };
 
   return (
@@ -214,7 +260,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "calendario"].map(s => (
+        {["empleados", "inscripciones", "calendario", "cuenta"].map(s => (
           <button
             key={s}
             style={{ ...styles.tab, ...(seccion === s ? styles.tabActivo : {}) }}
@@ -355,6 +401,51 @@ export default function Admin() {
         {seccion === "calendario" && (
           <div style={styles.card}>
             <Calendario esAdmin={true} />
+          </div>
+        )}
+
+        {seccion === "cuenta" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>Cambiar contraseña</h2>
+            {empleadoActual && (
+              <p style={{ color: "#666", marginBottom: 16, fontSize: 14 }}>
+                Usuario: <strong>{empleadoActual.apellido}, {empleadoActual.nombre}</strong>
+              </p>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Contraseña actual"
+                value={passActual}
+                onChange={e => setPassActual(e.target.value)}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Nueva contraseña"
+                value={passNueva}
+                onChange={e => setPassNueva(e.target.value)}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Repetir nueva contraseña"
+                value={passConfirm}
+                onChange={e => setPassConfirm(e.target.value)}
+              />
+              {mensajePass && (
+                <p style={{
+                  color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c",
+                  fontWeight: 500, fontSize: 14,
+                }}>
+                  {mensajePass}
+                </p>
+              )}
+              <button style={{ ...styles.boton, background: "#1a1a2e" }} onClick={cambiarPassword} disabled={loadingPass}>
+                {loadingPass ? "Guardando..." : "Cambiar contraseña"}
+              </button>
+            </div>
           </div>
         )}
 
