@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db, authSecundaria } from "../firebase";
 import {
-  collection, getDocs, deleteDoc, doc, setDoc, getDoc
+  collection, getDocs, deleteDoc, doc, setDoc, getDoc, updateDoc
 } from "firebase/firestore";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
@@ -33,6 +33,8 @@ export default function Admin() {
   const [empleadoActual, setEmpleadoActual] = useState(null);
   const [resumenQ1, setResumenQ1] = useState([]);
   const [resumenQ2, setResumenQ2] = useState([]);
+  const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
+  const [procesando, setProcesando] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -54,6 +56,7 @@ export default function Admin() {
     cargarEstadoInscripcion();
     cargarInscripciones();
     cargarEmpleadoActual();
+    cargarSolicitudes();
   }, []);
 
   useEffect(() => {
@@ -86,6 +89,15 @@ export default function Admin() {
     setInscripciones(lista);
   };
 
+  const cargarSolicitudes = async () => {
+    if (!user) return;
+    const snap = await getDocs(collection(db, "solicitudesCambio"));
+    const lista = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(s => s.receptorId === user.uid && s.estado === "pendiente");
+    setSolicitudesPendientes(lista);
+  };
+
   const cargarResumen = async () => {
     const snap = await getDocs(collection(db, "asignaciones"));
     const asigs = snap.docs
@@ -99,11 +111,7 @@ export default function Admin() {
       .filter(a => a.quincena === 1)
       .map(a => {
         const emp = mapaEmpleados[a.empleadoId];
-        return {
-          nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId,
-          dias: a.dias.length,
-          detalle: a.dias,
-        };
+        return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
       })
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
 
@@ -111,16 +119,53 @@ export default function Admin() {
       .filter(a => a.quincena === 2)
       .map(a => {
         const emp = mapaEmpleados[a.empleadoId];
-        return {
-          nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId,
-          dias: a.dias.length,
-          detalle: a.dias,
-        };
+        return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
       })
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
 
     setResumenQ1(q1);
     setResumenQ2(q2);
+  };
+
+  const responderSolicitud = async (solicitud, aceptar) => {
+    setProcesando(solicitud.id);
+    try {
+      if (aceptar) {
+        const snapAsigOrigen = await getDoc(doc(db, "asignaciones", solicitud.asigIdOrigen));
+        const snapAsigDestino = await getDoc(doc(db, "asignaciones", solicitud.asigIdDestino));
+
+        if (snapAsigOrigen.exists() && snapAsigDestino.exists()) {
+          const diasOrigen = snapAsigOrigen.data().dias;
+          const diasDestino = snapAsigDestino.data().dias;
+
+          const diaAQuitar = diasOrigen.find(d => d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen);
+          const diaADar = diasDestino.find(d => d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino);
+
+          if (diaAQuitar && diaADar) {
+            const nuevosDiasOrigen = diasOrigen
+              .filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
+            nuevosDiasOrigen.push(diaADar);
+
+            const nuevosDiasDestino = diasDestino
+              .filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
+            nuevosDiasDestino.push(diaAQuitar);
+
+            await updateDoc(doc(db, "asignaciones", solicitud.asigIdOrigen), { dias: nuevosDiasOrigen });
+            await updateDoc(doc(db, "asignaciones", solicitud.asigIdDestino), { dias: nuevosDiasDestino });
+          }
+        }
+      }
+
+      await updateDoc(doc(db, "solicitudesCambio", solicitud.id), {
+        estado: aceptar ? "aceptado" : "rechazado",
+        respondidoEn: new Date().toISOString(),
+      });
+
+      cargarSolicitudes();
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+    setProcesando(null);
   };
 
   const ejecutarDistribucion = async () => {
@@ -130,9 +175,7 @@ export default function Admin() {
     try {
       const snapEmps = await getDocs(collection(db, "empleados"));
       const historial = {};
-      snapEmps.docs.forEach(d => {
-        historial[d.id] = d.data().historialDescartes || 0;
-      });
+      snapEmps.docs.forEach(d => { historial[d.id] = d.data().historialDescartes || 0; });
 
       const snapInsc = await getDocs(collection(db, "inscripciones"));
       const inscriptos = snapInsc.docs
@@ -144,9 +187,7 @@ export default function Admin() {
         const data = d.data();
         return data.mes === mesProximo && data.anio === anioProximo;
       });
-      for (const d of borrar) {
-        await deleteDoc(doc(db, "asignaciones", d.id));
-      }
+      for (const d of borrar) await deleteDoc(doc(db, "asignaciones", d.id));
 
       const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial);
       const inscKey = `${anioProximo}-${mesProximo}`;
@@ -167,11 +208,7 @@ export default function Admin() {
 
       for (const desc of [...q1.descartados, ...q2.descartados]) {
         const actual = historial[desc.empleadoId] || 0;
-        await setDoc(
-          doc(db, "empleados", desc.empleadoId),
-          { historialDescartes: actual + 1 },
-          { merge: true }
-        );
+        await setDoc(doc(db, "empleados", desc.empleadoId), { historialDescartes: actual + 1 }, { merge: true });
       }
 
       setMensajeDistribucion("✓ Distribución generada correctamente");
@@ -291,6 +328,9 @@ export default function Admin() {
     if (s === "inscripciones") return "📋 Inscripciones";
     if (s === "calendario") return "📅 Calendario";
     if (s === "resumen") return "📊 Resumen";
+    if (s === "cambios") return solicitudesPendientes.length > 0
+      ? `🔄 Cambios (${solicitudesPendientes.length})`
+      : "🔄 Cambios";
     return "🔑 Mi cuenta";
   };
 
@@ -300,16 +340,14 @@ export default function Admin() {
     noche:  { bg: "#e8eaf6", text: "#283593" },
   };
 
-  const renderColumnaResumen = (lista, titulo, quincena) => (
+  const renderColumnaResumen = (lista, titulo) => (
     <div style={styles.resumenCol}>
       <div style={styles.resumenHeader}>
         <h3 style={styles.resumenTitulo}>{titulo}</h3>
         <span style={styles.resumenCount}>{lista.length} personas</span>
       </div>
       {lista.length === 0 ? (
-        <p style={{ color: "#999", fontSize: 13, padding: 12 }}>
-          Sin distribución generada
-        </p>
+        <p style={{ color: "#999", fontSize: 13, padding: 12 }}>Sin distribución generada</p>
       ) : (
         lista.map((emp, i) => (
           <div key={i} style={styles.resumenFila}>
@@ -318,11 +356,7 @@ export default function Admin() {
               {emp.detalle.map((d, j) => {
                 const color = COLORES_TURNO[d.turno] || { bg: "#f5f5f5", text: "#333" };
                 return (
-                  <span key={j} style={{
-                    ...styles.resumenChip,
-                    background: color.bg,
-                    color: color.text,
-                  }}>
+                  <span key={j} style={{ ...styles.resumenChip, background: color.bg, color: color.text }}>
                     {d.label} {d.turno === "mañana" ? "☀️" : d.turno === "tarde" ? "🌅" : "🌙"}
                   </span>
                 );
@@ -334,8 +368,17 @@ export default function Admin() {
     </div>
   );
 
+  const mapaEmpleados = {};
+  empleados.forEach(e => { mapaEmpleados[e.id] = e; });
+
   return (
     <div style={styles.container}>
+      {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
+        <div style={styles.banner} onClick={() => setSeccion("cambios")}>
+          🔔 Tenés {solicitudesPendientes.length} solicitud{solicitudesPendientes.length > 1 ? "es" : ""} de cambio pendiente{solicitudesPendientes.length > 1 ? "s" : ""}. Tocá para ver.
+        </div>
+      )}
+
       <div style={styles.header}>
         <h1 style={styles.title}>solAPPe {mobile ? "" : "— Admin"}</h1>
         <button style={styles.logout} onClick={() => signOut(auth)}>
@@ -344,10 +387,14 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "resumen", "calendario", "cuenta"].map(s => (
+        {["empleados", "inscripciones", "resumen", "calendario", "cambios", "cuenta"].map(s => (
           <button
             key={s}
-            style={{ ...styles.tab, ...(seccion === s ? styles.tabActivo : {}) }}
+            style={{
+              ...styles.tab,
+              ...(seccion === s ? styles.tabActivo : {}),
+              ...(s === "cambios" && solicitudesPendientes.length > 0 ? styles.tabAlerta : {}),
+            }}
             onClick={() => setSeccion(s)}
           >
             {labelTab(s)}
@@ -484,21 +531,13 @@ export default function Admin() {
 
         {seccion === "resumen" && (
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>
-              Resumen de distribución — {nombreMes} {anioProximo}
-            </h2>
+            <h2 style={styles.cardTitle}>Resumen de distribución — {nombreMes} {anioProximo}</h2>
             {resumenQ1.length === 0 && resumenQ2.length === 0 ? (
-              <div style={styles.aviso}>
-                📊 Todavía no se generó la distribución para este mes.
-              </div>
+              <div style={styles.aviso}>📊 Todavía no se generó la distribución para este mes.</div>
             ) : (
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: mobile ? "1fr" : "1fr 1fr",
-                gap: 16,
-              }}>
-                {renderColumnaResumen(resumenQ1, "1ra Quincena (1-15)", 1)}
-                {renderColumnaResumen(resumenQ2, "2da Quincena (16-fin)", 2)}
+              <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                {renderColumnaResumen(resumenQ1, "1ra Quincena (1-15)")}
+                {renderColumnaResumen(resumenQ2, "2da Quincena (16-fin)")}
               </div>
             )}
           </div>
@@ -506,7 +545,59 @@ export default function Admin() {
 
         {seccion === "calendario" && (
           <div style={styles.card}>
-            <Calendario esAdmin={true} />
+            <Calendario esAdmin={false} />
+          </div>
+        )}
+
+        {seccion === "cambios" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>🔄 Solicitudes de cambio</h2>
+            {solicitudesPendientes.length === 0 ? (
+              <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {solicitudesPendientes.map(s => {
+                  const solicitante = mapaEmpleados[s.solicitanteId];
+                  return (
+                    <div key={s.id} style={styles.solicitudCard}>
+                      <div style={styles.solicitudInfo}>
+                        <p style={styles.solicitudTitulo}>
+                          <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
+                          {" "}quiere cambiar contigo
+                        </p>
+                        <div style={styles.solicitudDetalle}>
+                          <div style={styles.solicitudDia}>
+                            <span style={styles.solicitudLabel}>Te da:</span>
+                            <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
+                          </div>
+                          <div style={styles.solicitudFlecha}>⇄</div>
+                          <div style={styles.solicitudDia}>
+                            <span style={styles.solicitudLabel}>Toma tu:</span>
+                            <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={styles.solicitudBotones}>
+                        <button
+                          style={styles.botonAceptar}
+                          onClick={() => responderSolicitud(s, true)}
+                          disabled={procesando === s.id}
+                        >
+                          {procesando === s.id ? "..." : "✓ Aceptar"}
+                        </button>
+                        <button
+                          style={styles.botonRechazar}
+                          onClick={() => responderSolicitud(s, false)}
+                          disabled={procesando === s.id}
+                        >
+                          ✕ Rechazar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -541,6 +632,11 @@ export default function Admin() {
 
 const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
+  banner: {
+    background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283593",
+    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600,
+    cursor: "pointer",
+  },
   header: {
     background: "#c0392b", color: "white", padding: "12px 16px",
     display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -561,6 +657,7 @@ const styles = {
     marginBottom: -2, whiteSpace: "nowrap",
   },
   tabActivo: { color: "#c0392b", fontWeight: 700, borderBottom: "3px solid #c0392b" },
+  tabAlerta: { color: "#3f51b5", fontWeight: 700 },
   content: { padding: 16, maxWidth: 1000, margin: "0 auto" },
   card: {
     background: "white", borderRadius: 12, padding: 16, marginBottom: 16,
@@ -603,9 +700,7 @@ const styles = {
   rowBotones: { display: "flex", gap: 8 },
   estadoRow: { display: "flex", alignItems: "center", gap: 16 },
   estadoBadge: { padding: "10px 16px", borderRadius: 8, fontWeight: 600, fontSize: 14, flex: 1 },
-  resumenCol: {
-    border: "1px solid #eee", borderRadius: 10, overflow: "hidden",
-  },
+  resumenCol: { border: "1px solid #eee", borderRadius: 10, overflow: "hidden" },
   resumenHeader: {
     background: "#f0f2f5", padding: "10px 14px",
     display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -616,12 +711,27 @@ const styles = {
     background: "#1a1a2e", color: "white", fontSize: 12,
     padding: "2px 8px", borderRadius: 12, fontWeight: 600,
   },
-  resumenFila: {
-    padding: "10px 14px", borderBottom: "1px solid #f5f5f5",
-  },
+  resumenFila: { padding: "10px 14px", borderBottom: "1px solid #f5f5f5" },
   resumenNombre: { fontWeight: 600, fontSize: 14, color: "#1a1a2e", marginBottom: 6 },
   resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
-  resumenChip: {
-    fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500,
+  resumenChip: { fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500 },
+  solicitudCard: {
+    border: "1px solid #e8eaf6", borderRadius: 10, padding: 16, background: "#f8f9ff",
+  },
+  solicitudInfo: { marginBottom: 12 },
+  solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 10 },
+  solicitudDetalle: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" },
+  solicitudDia: { display: "flex", flexDirection: "column", gap: 2 },
+  solicitudLabel: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase" },
+  solicitudValor: { fontSize: 14, color: "#1a1a2e", fontWeight: 700 },
+  solicitudFlecha: { fontSize: 20, color: "#3f51b5", fontWeight: 700 },
+  solicitudBotones: { display: "flex", gap: 8 },
+  botonAceptar: {
+    background: "#27ae60", color: "white", border: "none",
+    padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer",
+  },
+  botonRechazar: {
+    background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
+    padding: "8px 16px", borderRadius: 8, fontSize: 14, cursor: "pointer",
   },
 };
