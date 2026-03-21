@@ -36,6 +36,10 @@ export default function Admin() {
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
   const [historialCambios, setHistorialCambios] = useState([]);
   const [procesando, setProcesando] = useState(null);
+  const [diasAsistencia, setDiasAsistencia] = useState([]);
+  const [asistencias, setAsistencias] = useState({});
+  const [reemplazante, setReemplazante] = useState({});
+  const [diaSeleccionado, setDiaSeleccionado] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -63,6 +67,7 @@ export default function Admin() {
   useEffect(() => {
     if (seccion === "resumen") cargarResumen();
     if (seccion === "cambios") cargarHistorial();
+    if (seccion === "asistencia") cargarAsistencia();
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -112,17 +117,83 @@ export default function Admin() {
     const asigs = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(a => a.mes === mesProximo && a.anio === anioProximo);
-
     const mapaEmp = {};
     empleados.forEach(e => { mapaEmp[e.id] = e; });
-
     const mapear = (list) => list.map(a => {
       const emp = mapaEmp[a.empleadoId];
       return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
     }).sort((a, b) => a.nombre.localeCompare(b.nombre));
-
     setResumenQ1(mapear(asigs.filter(a => a.quincena === 1)));
     setResumenQ2(mapear(asigs.filter(a => a.quincena === 2)));
+  };
+
+  const cargarAsistencia = async () => {
+    // Generar los últimos 3 días (hoy + 2 anteriores)
+    const dias = [];
+    for (let i = 0; i < 3; i++) {
+      const fecha = new Date(ahora);
+      fecha.setDate(ahora.getDate() - i);
+      const diaNum = fecha.getDate();
+      const mesNum = fecha.getMonth() + 1;
+      const anioNum = fecha.getFullYear();
+      const label = `${diaNum}/${mesNum}`;
+      const key = `${anioNum}-${mesNum}-${diaNum}`;
+
+      // Buscar asignados para ese día en asignaciones
+      const snapAsig = await getDocs(collection(db, "asignaciones"));
+      const asignados = [];
+      snapAsig.docs.forEach(d => {
+        const data = d.data();
+        data.dias.forEach(dia => {
+          const fechaDia = new Date(dia.fecha);
+          if (
+            fechaDia.getDate() === diaNum &&
+            fechaDia.getMonth() + 1 === mesNum &&
+            fechaDia.getFullYear() === anioNum
+          ) {
+            asignados.push({ empleadoId: data.empleadoId, turno: dia.turno, label: dia.label });
+          }
+        });
+      });
+
+      dias.push({ fecha, diaNum, mesNum, anioNum, label, key, asignados });
+    }
+    setDiasAsistencia(dias);
+    setDiaSeleccionado(dias[0]?.key);
+
+    // Cargar asistencias guardadas
+    const snapAsis = await getDocs(collection(db, "asistencias"));
+    const mapaAsis = {};
+    snapAsis.docs.forEach(d => { mapaAsis[d.id] = d.data(); });
+    setAsistencias(mapaAsis);
+  };
+
+  const toggleConfirmado = async (diaKey, empleadoId) => {
+    const docId = `${diaKey}_${empleadoId}`;
+    const actual = asistencias[docId];
+    if (actual?.confirmado) {
+      await deleteDoc(doc(db, "asistencias", docId));
+      setAsistencias(prev => { const n = { ...prev }; delete n[docId]; return n; });
+    } else {
+      const data = { diaKey, empleadoId, confirmado: true, esReemplazante: false, creadoEn: new Date().toISOString() };
+      await setDoc(doc(db, "asistencias", docId), data);
+      setAsistencias(prev => ({ ...prev, [docId]: data }));
+    }
+  };
+
+  const agregarReemplazante = async (diaKey, empId, turno) => {
+    if (!empId) return;
+    const docId = `${diaKey}_${empId}_reemplazo`;
+    const data = { diaKey, empleadoId: empId, confirmado: true, esReemplazante: true, turno, creadoEn: new Date().toISOString() };
+    await setDoc(doc(db, "asistencias", docId), data);
+    setAsistencias(prev => ({ ...prev, [docId]: data }));
+    setReemplazante(prev => ({ ...prev, [diaKey]: "" }));
+  };
+
+  const borrarReemplazante = async (diaKey, empId) => {
+    const docId = `${diaKey}_${empId}_reemplazo`;
+    await deleteDoc(doc(db, "asistencias", docId));
+    setAsistencias(prev => { const n = { ...prev }; delete n[docId]; return n; });
   };
 
   const responderSolicitud = async (solicitud, aceptar) => {
@@ -131,13 +202,11 @@ export default function Admin() {
       if (aceptar) {
         const snapAsigOrigen = await getDoc(doc(db, "asignaciones", solicitud.asigIdOrigen));
         const snapAsigDestino = await getDoc(doc(db, "asignaciones", solicitud.asigIdDestino));
-
         if (snapAsigOrigen.exists() && snapAsigDestino.exists()) {
           const diasOrigen = snapAsigOrigen.data().dias;
           const diasDestino = snapAsigDestino.data().dias;
           const diaAQuitar = diasOrigen.find(d => d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen);
           const diaADar = diasDestino.find(d => d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino);
-
           if (diaAQuitar && diaADar) {
             const nuevosDiasOrigen = diasOrigen.filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
             nuevosDiasOrigen.push(diaADar);
@@ -168,41 +237,34 @@ export default function Admin() {
       const snapEmps = await getDocs(collection(db, "empleados"));
       const historial = {};
       snapEmps.docs.forEach(d => { historial[d.id] = d.data().historialDescartes || 0; });
-
       const snapInsc = await getDocs(collection(db, "inscripciones"));
       const inscriptos = snapInsc.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
-
       const snapAsig = await getDocs(collection(db, "asignaciones"));
       const borrar = snapAsig.docs.filter(d => {
         const data = d.data();
         return data.mes === mesProximo && data.anio === anioProximo;
       });
       for (const d of borrar) await deleteDoc(doc(db, "asignaciones", d.id));
-
       const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial);
       const inscKey = `${anioProximo}-${mesProximo}`;
-
       const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ1)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q1`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 1, dias,
         });
       }
-
       const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ2)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q2`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 2, dias,
         });
       }
-
       for (const desc of [...q1.descartados, ...q2.descartados]) {
         const actual = historial[desc.empleadoId] || 0;
         await setDoc(doc(db, "empleados", desc.empleadoId), { historialDescartes: actual + 1 }, { merge: true });
       }
-
       setMensajeDistribucion("✓ Distribución generada correctamente");
     } catch (err) {
       setMensajeDistribucion("Error: " + err.message);
@@ -320,6 +382,7 @@ export default function Admin() {
     if (s === "inscripciones") return "📋 Inscripciones";
     if (s === "calendario") return "📅 Calendario";
     if (s === "resumen") return "📊 Resumen";
+    if (s === "asistencia") return "✅ Asistencia";
     if (s === "cambios") return solicitudesPendientes.length > 0
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
@@ -407,18 +470,10 @@ export default function Admin() {
         </div>
         {conBotones && (
           <div style={styles.solicitudBotones}>
-            <button
-              style={styles.botonAceptar}
-              onClick={() => responderSolicitud(s, true)}
-              disabled={procesando === s.id}
-            >
+            <button style={styles.botonAceptar} onClick={() => responderSolicitud(s, true)} disabled={procesando === s.id}>
               {procesando === s.id ? "..." : "✓ Aceptar"}
             </button>
-            <button
-              style={styles.botonRechazar}
-              onClick={() => responderSolicitud(s, false)}
-              disabled={procesando === s.id}
-            >
+            <button style={styles.botonRechazar} onClick={() => responderSolicitud(s, false)} disabled={procesando === s.id}>
               ✕ Rechazar
             </button>
           </div>
@@ -426,6 +481,13 @@ export default function Admin() {
       </div>
     );
   };
+
+  const diaActual = diasAsistencia.find(d => d.key === diaSeleccionado);
+  const reemplazantesDelDia = diaActual
+    ? Object.entries(asistencias)
+        .filter(([k, v]) => k.startsWith(diaActual.key) && v.esReemplazante)
+        .map(([k, v]) => ({ docId: k, ...v }))
+    : [];
 
   return (
     <div style={styles.container}>
@@ -443,7 +505,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "resumen", "calendario", "cambios", "cuenta"].map(s => (
+        {["empleados", "inscripciones", "resumen", "calendario", "asistencia", "cambios", "cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -605,6 +667,142 @@ export default function Admin() {
           </div>
         )}
 
+        {seccion === "asistencia" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>✅ Control de asistencia</h2>
+
+            {/* Selector de día */}
+            <div style={styles.diasSelectorRow}>
+              {diasAsistencia.map(d => {
+                const nombreDia = d.fecha.toLocaleString("es-AR", { weekday: "short" });
+                const esHoy = d.diaNum === ahora.getDate() && d.mesNum === ahora.getMonth() + 1;
+                return (
+                  <button
+                    key={d.key}
+                    style={{
+                      ...styles.diaBtn,
+                      ...(diaSeleccionado === d.key ? styles.diaBtnActivo : {}),
+                    }}
+                    onClick={() => setDiaSeleccionado(d.key)}
+                  >
+                    <span style={{ fontSize: 11, textTransform: "capitalize" }}>{nombreDia}</span>
+                    <span style={{ fontWeight: 800, fontSize: 18 }}>{d.diaNum}</span>
+                    {esHoy && <span style={{ fontSize: 10, color: "#27ae60" }}>Hoy</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {diaActual && (
+              <>
+                {/* Lista de asignados */}
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", margin: "16px 0 10px" }}>
+                  Asignados para el {diaActual.label}
+                </h3>
+
+                {diaActual.asignados.length === 0 ? (
+                  <div style={styles.aviso}>No hay empleados asignados para este día.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                    {diaActual.asignados.map((a, i) => {
+                      const emp = mapaEmpleados[a.empleadoId];
+                      const docId = `${diaActual.key}_${a.empleadoId}`;
+                      const confirmado = asistencias[docId]?.confirmado;
+                      const color = COLORES_TURNO[a.turno] || { bg: "#f5f5f5", text: "#333" };
+                      return (
+                        <div key={i} style={{
+                          ...styles.asistenciaFila,
+                          background: confirmado ? "#eafaf1" : "white",
+                          border: `1px solid ${confirmado ? "#27ae60" : "#eee"}`,
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 20 }}>{confirmado ? "✅" : "⬜"}</span>
+                            <div>
+                              <div style={{ fontWeight: 600, fontSize: 14, color: "#1a1a2e" }}>
+                                {emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId}
+                              </div>
+                              <span style={{ ...styles.resumenChip, background: color.bg, color: color.text, fontSize: 11 }}>
+                                {a.turno} {a.turno === "mañana" ? "☀️" : a.turno === "tarde" ? "🌅" : "🌙"}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            style={{
+                              ...styles.botonSecundario,
+                              background: confirmado ? "#e74c3c" : "#27ae60",
+                            }}
+                            onClick={() => toggleConfirmado(diaActual.key, a.empleadoId)}
+                          >
+                            {confirmado ? "Quitar" : "Confirmar"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Reemplazantes */}
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
+                  Reemplazantes / adicionales
+                </h3>
+
+                {reemplazantesDelDia.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                    {reemplazantesDelDia.map((r) => {
+                      const emp = mapaEmpleados[r.empleadoId];
+                      return (
+                        <div key={r.docId} style={{
+                          ...styles.asistenciaFila,
+                          background: "#e8f4fd",
+                          border: "1px solid #3f51b5",
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 20 }}>🔄</span>
+                            <div>
+                              <div style={{ fontWeight: 600, fontSize: 14, color: "#1a1a2e" }}>
+                                {emp ? `${emp.apellido}, ${emp.nombre}` : r.empleadoId}
+                              </div>
+                              <span style={{ fontSize: 11, color: "#3f51b5" }}>Reemplazante</span>
+                            </div>
+                          </div>
+                          <button
+                            style={{ ...styles.botonEliminar }}
+                            onClick={() => borrarReemplazante(diaActual.key, r.empleadoId)}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div style={{ ...styles.grid, gridTemplateColumns: mobile ? "1fr" : "2fr 1fr", gap: 8 }}>
+                  <select
+                    style={styles.input}
+                    value={reemplazante[diaActual.key] || ""}
+                    onChange={e => setReemplazante(prev => ({ ...prev, [diaActual.key]: e.target.value }))}
+                  >
+                    <option value="">Seleccioná reemplazante</option>
+                    {empleados
+                      .filter(e => !diaActual.asignados.find(a => a.empleadoId === e.id))
+                      .map(e => (
+                        <option key={e.id} value={e.id}>{e.apellido}, {e.nombre}</option>
+                      ))
+                    }
+                  </select>
+                  <button
+                    style={{ ...styles.boton, background: "#3f51b5" }}
+                    onClick={() => agregarReemplazante(diaActual.key, reemplazante[diaActual.key], "solape")}
+                  >
+                    Agregar
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {seccion === "cambios" && (
           <>
             <div style={styles.card}>
@@ -617,7 +815,6 @@ export default function Admin() {
                 </div>
               )}
             </div>
-
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>📋 Historial de cambios</h2>
               {historialCambios.length === 0 ? (
@@ -763,5 +960,19 @@ const styles = {
   botonRechazar: {
     background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
     padding: "8px 16px", borderRadius: 8, fontSize: 14, cursor: "pointer",
+  },
+  diasSelectorRow: { display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" },
+  diaBtn: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    padding: "10px 16px", borderRadius: 10, border: "1px solid #ddd",
+    background: "white", cursor: "pointer", minWidth: 70, gap: 2,
+  },
+  diaBtnActivo: {
+    background: "#1a1a2e", color: "white",
+    border: "1px solid #1a1a2e",
+  },
+  asistenciaFila: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "10px 14px", borderRadius: 8,
   },
 };
