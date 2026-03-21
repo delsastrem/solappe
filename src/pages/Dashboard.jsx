@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db } from "../firebase";
-import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc, arrayRemove, arrayUnion } from "firebase/firestore";
 import Calendario from "./Calendario";
 
 export default function Dashboard() {
@@ -18,6 +18,9 @@ export default function Dashboard() {
   const [mensajePass, setMensajePass] = useState("");
   const [loadingPass, setLoadingPass] = useState(false);
   const [mobile, setMobile] = useState(window.innerWidth < 640);
+  const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
+  const [empleados, setEmpleados] = useState({});
+  const [procesando, setProcesando] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -36,6 +39,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     cargarDatos();
+    cargarEmpleados();
+    cargarSolicitudes();
   }, []);
 
   const cargarDatos = async () => {
@@ -47,6 +52,69 @@ export default function Dashboard() {
     if (snapInsc.exists()) setInscripcion(snapInsc.data());
     const snapConfig = await getDoc(doc(db, "config", "inscripcion"));
     if (snapConfig.exists()) setInscripcionAbierta(snapConfig.data().abierta === true);
+  };
+
+  const cargarEmpleados = async () => {
+    const snap = await getDocs(collection(db, "empleados"));
+    const mapa = {};
+    snap.docs.forEach(d => { mapa[d.id] = d.data(); });
+    setEmpleados(mapa);
+  };
+
+  const cargarSolicitudes = async () => {
+    if (!user) return;
+    const snap = await getDocs(collection(db, "solicitudesCambio"));
+    const lista = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(s => s.receptorId === user.uid && s.estado === "pendiente");
+    setSolicitudesPendientes(lista);
+  };
+
+  const responderSolicitud = async (solicitud, aceptar) => {
+    setProcesando(solicitud.id);
+    try {
+      if (aceptar) {
+        // Intercambiar los días en las asignaciones
+        // 1. Sacar el día del solicitante de su asignación y agregar el del receptor
+        const snapAsigOrigen = await getDoc(doc(db, "asignaciones", solicitud.asigIdOrigen));
+        const snapAsigDestino = await getDoc(doc(db, "asignaciones", solicitud.asigIdDestino));
+
+        if (snapAsigOrigen.exists() && snapAsigDestino.exists()) {
+          const diasOrigen = snapAsigOrigen.data().dias;
+          const diasDestino = snapAsigDestino.data().dias;
+
+          // Encontrar los días específicos a intercambiar
+          const diaAQuitar = diasOrigen.find(d => d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen);
+          const diaADar = diasDestino.find(d => d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino);
+
+          if (diaAQuitar && diaADar) {
+            // Actualizar asignación del solicitante: quitar su día, agregar el del receptor
+            const nuevosDiasOrigen = diasOrigen
+              .filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
+            nuevosDiasOrigen.push(diaADar);
+
+            // Actualizar asignación del receptor: quitar su día, agregar el del solicitante
+            const nuevosDiasDestino = diasDestino
+              .filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
+            nuevosDiasDestino.push(diaAQuitar);
+
+            await updateDoc(doc(db, "asignaciones", solicitud.asigIdOrigen), { dias: nuevosDiasOrigen });
+            await updateDoc(doc(db, "asignaciones", solicitud.asigIdDestino), { dias: nuevosDiasDestino });
+          }
+        }
+      }
+
+      // Actualizar estado de la solicitud
+      await updateDoc(doc(db, "solicitudesCambio", solicitud.id), {
+        estado: aceptar ? "aceptado" : "rechazado",
+        respondidoEn: new Date().toISOString(),
+      });
+
+      cargarSolicitudes();
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+    setProcesando(null);
   };
 
   const inscribirse = async () => {
@@ -100,9 +168,7 @@ export default function Dashboard() {
       await reauthenticateWithCredential(user, credential);
       await updatePassword(user, passNueva);
       setMensajePass("✓ Contraseña actualizada correctamente");
-      setPassActual("");
-      setPassNueva("");
-      setPassConfirm("");
+      setPassActual(""); setPassNueva(""); setPassConfirm("");
     } catch (err) {
       if (err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
         setMensajePass("La contraseña actual es incorrecta");
@@ -123,11 +189,21 @@ export default function Dashboard() {
   const labelTab = (s) => {
     if (s === "inscripcion") return `📋 ${mobile ? "Inscripción" : `Inscripción — ${nombreMes}`}`;
     if (s === "calendario") return "📅 Calendario";
+    if (s === "cambios") return solicitudesPendientes.length > 0
+      ? `🔄 Cambios (${solicitudesPendientes.length})`
+      : "🔄 Cambios";
     return "🔑 Mi cuenta";
   };
 
   return (
     <div style={styles.container}>
+      {/* Banner notificación si hay solicitudes pendientes */}
+      {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
+        <div style={styles.banner} onClick={() => setSeccion("cambios")}>
+          🔔 Tenés {solicitudesPendientes.length} solicitud{solicitudesPendientes.length > 1 ? "es" : ""} de cambio pendiente{solicitudesPendientes.length > 1 ? "s" : ""}. Tocá para ver.
+        </div>
+      )}
+
       <div style={styles.header}>
         <h1 style={styles.title}>solAPPe</h1>
         <div style={styles.headerRight}>
@@ -143,10 +219,14 @@ export default function Dashboard() {
       </div>
 
       <div style={styles.tabs}>
-        {["inscripcion", "calendario", "cuenta"].map(s => (
+        {["inscripcion", "calendario", "cambios", "cuenta"].map(s => (
           <button
             key={s}
-            style={{ ...styles.tab, ...(seccion === s ? styles.tabActivo : {}) }}
+            style={{
+              ...styles.tab,
+              ...(seccion === s ? styles.tabActivo : {}),
+              ...(s === "cambios" && solicitudesPendientes.length > 0 ? styles.tabAlerta : {}),
+            }}
             onClick={() => setSeccion(s)}
           >
             {labelTab(s)}
@@ -161,14 +241,12 @@ export default function Dashboard() {
             <h2 style={styles.cardTitle}>
               Inscripción — {nombreMes} {anioProximo}
             </h2>
-
             {!inscripcionAbierta && !inscripcion && (
               <div style={styles.aviso}>
                 📅 Las inscripciones están cerradas por el momento.
                 Cuando se abra el período vas a poder anotarte acá.
               </div>
             )}
-
             {inscripcionAbierta && !inscripcion && (
               <div>
                 <p style={styles.label}>¿En qué quincena querés hacer el solape?</p>
@@ -176,10 +254,7 @@ export default function Dashboard() {
                   {["q1", "q2", "ambas"].map(op => (
                     <button
                       key={op}
-                      style={{
-                        ...styles.opcion,
-                        ...(preferencia === op ? styles.opcionActiva : {})
-                      }}
+                      style={{ ...styles.opcion, ...(preferencia === op ? styles.opcionActiva : {}) }}
                       onClick={() => setPreferencia(op)}
                     >
                       {labelPreferencia(op)}
@@ -192,7 +267,6 @@ export default function Dashboard() {
                 </button>
               </div>
             )}
-
             {inscripcion && (
               <div>
                 <div style={styles.inscriptoBox}>
@@ -222,6 +296,64 @@ export default function Dashboard() {
           </div>
         )}
 
+        {seccion === "cambios" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>🔄 Solicitudes de cambio</h2>
+            {solicitudesPendientes.length === 0 ? (
+              <div style={styles.aviso}>
+                No tenés solicitudes de cambio pendientes.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {solicitudesPendientes.map(s => {
+                  const solicitante = empleados[s.solicitanteId];
+                  return (
+                    <div key={s.id} style={styles.solicitudCard}>
+                      <div style={styles.solicitudInfo}>
+                        <p style={styles.solicitudTitulo}>
+                          <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
+                          {" "}quiere cambiar contigo
+                        </p>
+                        <div style={styles.solicitudDetalle}>
+                          <div style={styles.solicitudDia}>
+                            <span style={styles.solicitudLabel}>Te da:</span>
+                            <span style={styles.solicitudValor}>
+                              {s.labelOrigen} — {s.turnoOrigen}
+                            </span>
+                          </div>
+                          <div style={styles.solicitudFlecha}>⇄</div>
+                          <div style={styles.solicitudDia}>
+                            <span style={styles.solicitudLabel}>Toma tu:</span>
+                            <span style={styles.solicitudValor}>
+                              {s.labelDestino} — {s.turnoDestino}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={styles.solicitudBotones}>
+                        <button
+                          style={styles.botonAceptar}
+                          onClick={() => responderSolicitud(s, true)}
+                          disabled={procesando === s.id}
+                        >
+                          {procesando === s.id ? "..." : "✓ Aceptar"}
+                        </button>
+                        <button
+                          style={styles.botonRechazar}
+                          onClick={() => responderSolicitud(s, false)}
+                          disabled={procesando === s.id}
+                        >
+                          ✕ Rechazar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {seccion === "cuenta" && (
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>Cambiar contraseña</h2>
@@ -231,32 +363,11 @@ export default function Dashboard() {
               </p>
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Contraseña actual"
-                value={passActual}
-                onChange={e => setPassActual(e.target.value)}
-              />
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Nueva contraseña"
-                value={passNueva}
-                onChange={e => setPassNueva(e.target.value)}
-              />
-              <input
-                style={styles.input}
-                type="password"
-                placeholder="Repetir nueva contraseña"
-                value={passConfirm}
-                onChange={e => setPassConfirm(e.target.value)}
-              />
+              <input style={styles.input} type="password" placeholder="Contraseña actual" value={passActual} onChange={e => setPassActual(e.target.value)} />
+              <input style={styles.input} type="password" placeholder="Nueva contraseña" value={passNueva} onChange={e => setPassNueva(e.target.value)} />
+              <input style={styles.input} type="password" placeholder="Repetir nueva contraseña" value={passConfirm} onChange={e => setPassConfirm(e.target.value)} />
               {mensajePass && (
-                <p style={{
-                  color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c",
-                  fontWeight: 500, fontSize: 14,
-                }}>
+                <p style={{ color: mensajePass.startsWith("✓") ? "#27ae60" : "#e74c3c", fontWeight: 500, fontSize: 14 }}>
                   {mensajePass}
                 </p>
               )}
@@ -274,6 +385,11 @@ export default function Dashboard() {
 
 const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
+  banner: {
+    background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283593",
+    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600,
+    cursor: "pointer",
+  },
   header: {
     background: "#1a1a2e", color: "white", padding: "12px 16px",
     display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -296,6 +412,7 @@ const styles = {
     marginBottom: -2, whiteSpace: "nowrap",
   },
   tabActivo: { color: "#1a1a2e", fontWeight: 700, borderBottom: "3px solid #1a1a2e" },
+  tabAlerta: { color: "#3f51b5", fontWeight: 700 },
   content: { padding: 16, maxWidth: 1000, margin: "0 auto" },
   card: {
     background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
@@ -335,5 +452,27 @@ const styles = {
     padding: "10px 14px", borderRadius: 8, border: "1px solid #ddd",
     fontSize: 15, outline: "none", background: "white", color: "#1a1a2e",
     width: "100%", boxSizing: "border-box",
+  },
+  solicitudCard: {
+    border: "1px solid #e8eaf6", borderRadius: 10, padding: 16,
+    background: "#f8f9ff",
+  },
+  solicitudInfo: { marginBottom: 12 },
+  solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 10 },
+  solicitudDetalle: {
+    display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+  },
+  solicitudDia: { display: "flex", flexDirection: "column", gap: 2 },
+  solicitudLabel: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase" },
+  solicitudValor: { fontSize: 14, color: "#1a1a2e", fontWeight: 700 },
+  solicitudFlecha: { fontSize: 20, color: "#3f51b5", fontWeight: 700 },
+  solicitudBotones: { display: "flex", gap: 8 },
+  botonAceptar: {
+    background: "#27ae60", color: "white", border: "none",
+    padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer",
+  },
+  botonRechazar: {
+    background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
+    padding: "8px 16px", borderRadius: 8, fontSize: 14, cursor: "pointer",
   },
 };
