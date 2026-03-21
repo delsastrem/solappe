@@ -100,7 +100,7 @@ export default function Admin() {
     const confirmados = {};
     snapAsis.docs.forEach(d => {
       const data = d.data();
-      if (data.confirmado && !data.esReemplazante) {
+      if (data.confirmado) {
         if (!confirmados[data.empleadoId]) confirmados[data.empleadoId] = 0;
         confirmados[data.empleadoId]++;
       }

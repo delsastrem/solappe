@@ -90,7 +90,7 @@ export default function Dashboard() {
     let confirmados = 0;
     snapAsis.docs.forEach(d => {
       const data = d.data();
-      if (data.empleadoId === user.uid && data.confirmado && !data.esReemplazante) confirmados++;
+      if (data.empleadoId === user.uid && data.confirmado) confirmados++;
     });
     setRatioPropio({ asignados, confirmados });
   };
