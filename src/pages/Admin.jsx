@@ -34,6 +34,7 @@ export default function Admin() {
   const [resumenQ1, setResumenQ1] = useState([]);
   const [resumenQ2, setResumenQ2] = useState([]);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
+  const [historialCambios, setHistorialCambios] = useState([]);
   const [procesando, setProcesando] = useState(null);
 
   const user = auth.currentUser;
@@ -61,6 +62,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (seccion === "resumen") cargarResumen();
+    if (seccion === "cambios") cargarHistorial();
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -92,10 +94,17 @@ export default function Admin() {
   const cargarSolicitudes = async () => {
     if (!user) return;
     const snap = await getDocs(collection(db, "solicitudesCambio"));
-    const lista = snap.docs
+    const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    setSolicitudesPendientes(todas.filter(s => s.receptorId === user.uid && s.estado === "pendiente"));
+  };
+
+  const cargarHistorial = async () => {
+    const snap = await getDocs(collection(db, "solicitudesCambio"));
+    const todas = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
-      .filter(s => s.receptorId === user.uid && s.estado === "pendiente");
-    setSolicitudesPendientes(lista);
+      .filter(s => s.estado !== "pendiente")
+      .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn));
+    setHistorialCambios(todas);
   };
 
   const cargarResumen = async () => {
@@ -104,27 +113,16 @@ export default function Admin() {
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(a => a.mes === mesProximo && a.anio === anioProximo);
 
-    const mapaEmpleados = {};
-    empleados.forEach(e => { mapaEmpleados[e.id] = e; });
+    const mapaEmp = {};
+    empleados.forEach(e => { mapaEmp[e.id] = e; });
 
-    const q1 = asigs
-      .filter(a => a.quincena === 1)
-      .map(a => {
-        const emp = mapaEmpleados[a.empleadoId];
-        return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
-      })
-      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const mapear = (list) => list.map(a => {
+      const emp = mapaEmp[a.empleadoId];
+      return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
+    }).sort((a, b) => a.nombre.localeCompare(b.nombre));
 
-    const q2 = asigs
-      .filter(a => a.quincena === 2)
-      .map(a => {
-        const emp = mapaEmpleados[a.empleadoId];
-        return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
-      })
-      .sort((a, b) => a.nombre.localeCompare(b.nombre));
-
-    setResumenQ1(q1);
-    setResumenQ2(q2);
+    setResumenQ1(mapear(asigs.filter(a => a.quincena === 1)));
+    setResumenQ2(mapear(asigs.filter(a => a.quincena === 2)));
   };
 
   const responderSolicitud = async (solicitud, aceptar) => {
@@ -137,31 +135,25 @@ export default function Admin() {
         if (snapAsigOrigen.exists() && snapAsigDestino.exists()) {
           const diasOrigen = snapAsigOrigen.data().dias;
           const diasDestino = snapAsigDestino.data().dias;
-
           const diaAQuitar = diasOrigen.find(d => d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen);
           const diaADar = diasDestino.find(d => d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino);
 
           if (diaAQuitar && diaADar) {
-            const nuevosDiasOrigen = diasOrigen
-              .filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
+            const nuevosDiasOrigen = diasOrigen.filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
             nuevosDiasOrigen.push(diaADar);
-
-            const nuevosDiasDestino = diasDestino
-              .filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
+            const nuevosDiasDestino = diasDestino.filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
             nuevosDiasDestino.push(diaAQuitar);
-
             await updateDoc(doc(db, "asignaciones", solicitud.asigIdOrigen), { dias: nuevosDiasOrigen });
             await updateDoc(doc(db, "asignaciones", solicitud.asigIdDestino), { dias: nuevosDiasDestino });
           }
         }
       }
-
       await updateDoc(doc(db, "solicitudesCambio", solicitud.id), {
         estado: aceptar ? "aceptado" : "rechazado",
         respondidoEn: new Date().toISOString(),
       });
-
       cargarSolicitudes();
+      cargarHistorial();
     } catch (err) {
       alert("Error: " + err.message);
     }
@@ -371,6 +363,70 @@ export default function Admin() {
   const mapaEmpleados = {};
   empleados.forEach(e => { mapaEmpleados[e.id] = e; });
 
+  const renderSolicitudCard = (s, conBotones = false) => {
+    const solicitante = mapaEmpleados[s.solicitanteId];
+    const receptor = mapaEmpleados[s.receptorId];
+    return (
+      <div key={s.id} style={{
+        ...styles.solicitudCard,
+        borderLeft: `4px solid ${s.estado === "aceptado" ? "#27ae60" : s.estado === "rechazado" ? "#e74c3c" : "#3f51b5"}`,
+      }}>
+        <div style={styles.solicitudInfo}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+            <p style={styles.solicitudTitulo}>
+              <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
+              {" → "}
+              <strong>{receptor ? `${receptor.apellido}, ${receptor.nombre}` : "..."}</strong>
+            </p>
+            {!conBotones && (
+              <span style={{
+                fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
+                background: s.estado === "aceptado" ? "#eafaf1" : "#fdf2f2",
+                color: s.estado === "aceptado" ? "#27ae60" : "#e74c3c",
+              }}>
+                {s.estado === "aceptado" ? "✓ Aceptado" : "✕ Rechazado"}
+              </span>
+            )}
+          </div>
+          <div style={styles.solicitudDetalle}>
+            <div style={styles.solicitudDia}>
+              <span style={styles.solicitudLabel}>Da:</span>
+              <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
+            </div>
+            <div style={styles.solicitudFlecha}>⇄</div>
+            <div style={styles.solicitudDia}>
+              <span style={styles.solicitudLabel}>Recibe:</span>
+              <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
+            </div>
+          </div>
+          {!conBotones && s.respondidoEn && (
+            <p style={{ fontSize: 11, color: "#999", marginTop: 6 }}>
+              {new Date(s.respondidoEn).toLocaleDateString("es-AR")} {new Date(s.respondidoEn).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
+            </p>
+          )}
+        </div>
+        {conBotones && (
+          <div style={styles.solicitudBotones}>
+            <button
+              style={styles.botonAceptar}
+              onClick={() => responderSolicitud(s, true)}
+              disabled={procesando === s.id}
+            >
+              {procesando === s.id ? "..." : "✓ Aceptar"}
+            </button>
+            <button
+              style={styles.botonRechazar}
+              onClick={() => responderSolicitud(s, false)}
+              disabled={procesando === s.id}
+            >
+              ✕ Rechazar
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={styles.container}>
       {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
@@ -550,55 +606,29 @@ export default function Admin() {
         )}
 
         {seccion === "cambios" && (
-          <div style={styles.card}>
-            <h2 style={styles.cardTitle}>🔄 Solicitudes de cambio</h2>
-            {solicitudesPendientes.length === 0 ? (
-              <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {solicitudesPendientes.map(s => {
-                  const solicitante = mapaEmpleados[s.solicitanteId];
-                  return (
-                    <div key={s.id} style={styles.solicitudCard}>
-                      <div style={styles.solicitudInfo}>
-                        <p style={styles.solicitudTitulo}>
-                          <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
-                          {" "}quiere cambiar contigo
-                        </p>
-                        <div style={styles.solicitudDetalle}>
-                          <div style={styles.solicitudDia}>
-                            <span style={styles.solicitudLabel}>Te da:</span>
-                            <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
-                          </div>
-                          <div style={styles.solicitudFlecha}>⇄</div>
-                          <div style={styles.solicitudDia}>
-                            <span style={styles.solicitudLabel}>Toma tu:</span>
-                            <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div style={styles.solicitudBotones}>
-                        <button
-                          style={styles.botonAceptar}
-                          onClick={() => responderSolicitud(s, true)}
-                          disabled={procesando === s.id}
-                        >
-                          {procesando === s.id ? "..." : "✓ Aceptar"}
-                        </button>
-                        <button
-                          style={styles.botonRechazar}
-                          onClick={() => responderSolicitud(s, false)}
-                          disabled={procesando === s.id}
-                        >
-                          ✕ Rechazar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <>
+            <div style={styles.card}>
+              <h2 style={styles.cardTitle}>🔄 Mis solicitudes pendientes</h2>
+              {solicitudesPendientes.length === 0 ? (
+                <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {solicitudesPendientes.map(s => renderSolicitudCard(s, true))}
+                </div>
+              )}
+            </div>
+
+            <div style={styles.card}>
+              <h2 style={styles.cardTitle}>📋 Historial de cambios</h2>
+              {historialCambios.length === 0 ? (
+                <div style={styles.aviso}>Todavía no hay cambios registrados.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {historialCambios.map(s => renderSolicitudCard(s, false))}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
         {seccion === "cuenta" && (
@@ -716,10 +746,10 @@ const styles = {
   resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
   resumenChip: { fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500 },
   solicitudCard: {
-    border: "1px solid #e8eaf6", borderRadius: 10, padding: 16, background: "#f8f9ff",
+    border: "1px solid #e8eaf6", borderRadius: 10, padding: 14, background: "#f8f9ff",
   },
-  solicitudInfo: { marginBottom: 12 },
-  solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 10 },
+  solicitudInfo: { marginBottom: 10 },
+  solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 8 },
   solicitudDetalle: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" },
   solicitudDia: { display: "flex", flexDirection: "column", gap: 2 },
   solicitudLabel: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase" },
