@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db, auth } from "../firebase";
-import { collection, getDocs, addDoc, query, where } from "firebase/firestore";
+import { collection, getDocs, addDoc } from "firebase/firestore";
 import { getTurnoParaDia } from "../utils/distribucion";
 
 const COLORES_TURNO = {
@@ -15,14 +15,12 @@ const isMobile = () => window.innerWidth < 640;
 export default function Calendario({ esAdmin }) {
   const [asignaciones, setAsignaciones] = useState([]);
   const [empleados, setEmpleados] = useState({});
+  const [asistencias, setAsistencias] = useState({});
   const [vista, setVista] = useState(isMobile() ? "lista" : "calendario");
   const [mobile, setMobile] = useState(isMobile());
 
-  // Estado modal de cambio
   const [modalCambio, setModalCambio] = useState(null);
-  // modalCambio = { diaOrigen, turnoOrigen, labelOrigen, asigId }
   const [paso, setPaso] = useState(1);
-  // paso 1: elegir compañero, paso 2: elegir día del compañero
   const [compSeleccionado, setCompSeleccionado] = useState("");
   const [diaCompSeleccionado, setDiaCompSeleccionado] = useState(null);
   const [enviando, setEnviando] = useState(false);
@@ -48,6 +46,7 @@ export default function Calendario({ esAdmin }) {
 
   useEffect(() => {
     cargarAsignaciones();
+    cargarAsistencias();
   }, [mes, anio]);
 
   useEffect(() => {
@@ -66,6 +65,27 @@ export default function Calendario({ esAdmin }) {
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(a => a.mes === mes && a.anio === anio);
     setAsignaciones(lista);
+  };
+
+  const cargarAsistencias = async () => {
+    const snap = await getDocs(collection(db, "asistencias"));
+    const mapa = {};
+    snap.docs.forEach(d => { mapa[d.id] = d.data(); });
+    setAsistencias(mapa);
+  };
+
+  // Verificar si un empleado está confirmado para un día
+  const estaConfirmado = (dia, empleadoId) => {
+    const key = `${anio}-${mes}-${dia}_${empleadoId}`;
+    return asistencias[key]?.confirmado === true;
+  };
+
+  // Verificar si hay reemplazantes para un día
+  const getReemplazantes = (dia) => {
+    const prefix = `${anio}-${mes}-${dia}_`;
+    return Object.entries(asistencias)
+      .filter(([k, v]) => k.startsWith(prefix) && v.esReemplazante)
+      .map(([, v]) => v);
   };
 
   const mapaDias = {};
@@ -103,7 +123,6 @@ export default function Calendario({ esAdmin }) {
     return { turno, asignados };
   };
 
-  // Días asignados al compañero seleccionado en este mes
   const diasDelComp = compSeleccionado
     ? Object.entries(mapaDias)
         .flatMap(([dia, asigs]) =>
@@ -137,14 +156,12 @@ export default function Calendario({ esAdmin }) {
       await addDoc(collection(db, "solicitudesCambio"), {
         solicitanteId: user.uid,
         receptorId: compSeleccionado,
-        // Día del solicitante
         diaOrigen: modalCambio.diaOrigen,
         turnoOrigen: modalCambio.turnoOrigen,
         labelOrigen: modalCambio.labelOrigen,
         asigIdOrigen: modalCambio.asigId,
         mesOrigen: mes,
         anioOrigen: anio,
-        // Día del receptor
         diaDestino: diaCompSeleccionado.dia,
         turnoDestino: diaCompSeleccionado.turno,
         labelDestino: diaCompSeleccionado.label,
@@ -162,9 +179,10 @@ export default function Calendario({ esAdmin }) {
     setEnviando(false);
   };
 
-  const renderChip = (a, i, esLista = false) => {
+  const renderChip = (a, i, dia, esLista = false) => {
     const emp = empleados[a.empleadoId];
     const esMio = user && a.empleadoId === user.uid && !esAdmin;
+    const confirmado = estaConfirmado(dia, a.empleadoId);
     const nombre = esLista
       ? (emp ? `${emp.apellido}, ${emp.nombre}` : "...")
       : (emp ? emp.apellido.substring(0, 8) : "...");
@@ -182,11 +200,12 @@ export default function Calendario({ esAdmin }) {
           ...styles.chipEmpleado,
           ...(esLista ? { fontSize: 13 } : {}),
           ...(esMio ? styles.chipMio : {}),
+          ...(confirmado ? styles.chipConfirmado : {}),
           cursor: esMio ? "pointer" : "default",
         }}
-        title={esMio ? "Clic para solicitar cambio" : ""}
+        title={esMio ? "Clic para solicitar cambio" : confirmado ? "✓ Confirmado" : ""}
       >
-        {nombre} {esMio ? "🔄" : ""}
+        {confirmado ? "✓ " : ""}{nombre}{esMio && !confirmado ? " 🔄" : ""}
       </span>
     );
   };
@@ -201,16 +220,19 @@ export default function Calendario({ esAdmin }) {
       const { turno, asignados } = getDiaInfo(dia);
       const color = COLORES_TURNO[turno];
       const esHoy = dia === ahora.getDate() && mes === ahora.getMonth() + 1 && anio === ahora.getFullYear();
+      const reemplazantes = getReemplazantes(dia);
+      const hayConfirmados = asignados.some(a => estaConfirmado(dia, a.empleadoId)) || reemplazantes.length > 0;
+
       celdas.push(
         <div key={dia} style={{
           ...styles.celda,
-          background: color.bg,
-          border: `1.5px solid ${esHoy ? "#c0392b" : color.border}`,
+          background: hayConfirmados ? "#f0faf4" : color.bg,
+          border: `1.5px solid ${esHoy ? "#c0392b" : hayConfirmados ? "#27ae60" : color.border}`,
           outline: esHoy ? "2px solid #c0392b" : "none",
         }}>
           <div style={styles.celdaHeader}>
             <span style={{ fontWeight: 700, fontSize: 13, color: esHoy ? "#c0392b" : "#1a1a2e" }}>{dia}</span>
-            <span style={{ fontSize: 9, color: color.texto, fontWeight: 600, lineHeight: 1.2, textAlign: "right" }}>
+            <span style={{ fontSize: 9, color: hayConfirmados ? "#27ae60" : color.texto, fontWeight: 600, lineHeight: 1.2, textAlign: "right" }}>
               {turno !== "franco" ? turno : "F"}
             </span>
           </div>
@@ -218,8 +240,16 @@ export default function Calendario({ esAdmin }) {
             <div style={styles.asignadosList}>
               {asignados
                 .sort((a, b) => a.turno.localeCompare(b.turno))
-                .map((a, i) => renderChip(a, i, false))
+                .map((a, i) => renderChip(a, i, dia, false))
               }
+              {reemplazantes.map((r, i) => {
+                const emp = empleados[r.empleadoId];
+                return (
+                  <span key={`r${i}`} style={{ ...styles.chipEmpleado, ...styles.chipReemplazante }}>
+                    🔄 {emp ? emp.apellido.substring(0, 6) : "..."}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
@@ -237,8 +267,15 @@ export default function Calendario({ esAdmin }) {
       const color = COLORES_TURNO[turno];
       const fecha = new Date(anio, mes - 1, dia);
       const nombreDia = fecha.toLocaleString("es-AR", { weekday: "short" });
+      const reemplazantes = getReemplazantes(dia);
+      const hayConfirmados = asignados.some(a => estaConfirmado(dia, a.empleadoId)) || reemplazantes.length > 0;
+
       dias.push(
-        <div key={dia} style={{ ...styles.listaFila, borderLeft: `4px solid ${color.border}` }}>
+        <div key={dia} style={{
+          ...styles.listaFila,
+          borderLeft: `4px solid ${hayConfirmados ? "#27ae60" : color.border}`,
+          background: hayConfirmados ? "#f0faf4" : "white",
+        }}>
           <div style={styles.listaFecha}>
             <span style={styles.listaDia}>{dia}</span>
             <div style={{ display: "flex", flexDirection: "column" }}>
@@ -252,9 +289,20 @@ export default function Calendario({ esAdmin }) {
             {asignados.length === 0 ? (
               <span style={{ color: "#999", fontSize: 13 }}>Sin asignados</span>
             ) : (
-              asignados
-                .sort((a, b) => a.turno.localeCompare(b.turno))
-                .map((a, i) => renderChip(a, i, true))
+              <>
+                {asignados
+                  .sort((a, b) => a.turno.localeCompare(b.turno))
+                  .map((a, i) => renderChip(a, i, dia, true))
+                }
+                {reemplazantes.map((r, i) => {
+                  const emp = empleados[r.empleadoId];
+                  return (
+                    <span key={`r${i}`} style={{ ...styles.chipEmpleado, ...styles.chipReemplazante, fontSize: 13 }}>
+                      🔄 {emp ? `${emp.apellido}, ${emp.nombre}` : "..."}
+                    </span>
+                  );
+                })}
+              </>
             )}
           </div>
         </div>
@@ -266,7 +314,6 @@ export default function Calendario({ esAdmin }) {
   // ---- MODAL CAMBIO ----
   const renderModal = () => {
     if (!modalCambio) return null;
-    const empActual = empleados[user.uid];
     const compañeros = Object.entries(empleados)
       .filter(([id]) => id !== user.uid)
       .sort(([, a], [, b]) => a.apellido.localeCompare(b.apellido));
@@ -402,6 +449,10 @@ export default function Calendario({ esAdmin }) {
             <span style={{ fontSize: 12, color: "#555" }}>{v.label}</span>
           </div>
         ))}
+        <div style={styles.leyendaItem}>
+          <div style={{ width: 10, height: 10, borderRadius: 3, background: "#27ae60" }} />
+          <span style={{ fontSize: 12, color: "#555" }}>✓ Confirmado</span>
+        </div>
       </div>
 
       {vista === "calendario" && !mobile ? (
@@ -437,7 +488,7 @@ const styles = {
     background: "white", fontSize: 14, color: "#666",
   },
   toggleActivo: { background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e", fontWeight: 600 },
-  avisoambio: {
+  avisocambio: {
     background: "#e8eaf6", border: "1px solid #3f51b5", borderRadius: 8,
     padding: "8px 14px", fontSize: 13, color: "#283593",
     textAlign: "center", marginBottom: 12,
@@ -458,8 +509,15 @@ const styles = {
     display: "inline-block",
   },
   chipMio: {
-    background: "#1a1a2e", color: "white",
-    fontWeight: 600,
+    background: "#1a1a2e", color: "white", fontWeight: 600,
+  },
+  chipConfirmado: {
+    background: "#d4edda", color: "#1e8449", fontWeight: 600,
+    border: "1px solid #27ae60",
+  },
+  chipReemplazante: {
+    background: "#cce5ff", color: "#004085", fontWeight: 600,
+    border: "1px solid #3f51b5",
   },
   listaContainer: { display: "flex", flexDirection: "column", gap: 8 },
   listaFila: {
