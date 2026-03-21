@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db } from "../firebase";
-import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc, arrayRemove, arrayUnion } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc } from "firebase/firestore";
 import Calendario from "./Calendario";
 
 export default function Dashboard() {
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
   const [empleados, setEmpleados] = useState({});
   const [procesando, setProcesando] = useState(null);
+  const [ratioPropio, setRatioPropio] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -41,7 +42,12 @@ export default function Dashboard() {
     cargarDatos();
     cargarEmpleados();
     cargarSolicitudes();
+    cargarRatioPropio();
   }, []);
+
+  useEffect(() => {
+    if (seccion === "cuenta") cargarRatioPropio();
+  }, [seccion]);
 
   const cargarDatos = async () => {
     if (!user) return;
@@ -70,46 +76,50 @@ export default function Dashboard() {
     setSolicitudesPendientes(lista);
   };
 
+  const cargarRatioPropio = async () => {
+    if (!user) return;
+    // Contar asignados
+    const snapAsig = await getDocs(collection(db, "asignaciones"));
+    let asignados = 0;
+    snapAsig.docs.forEach(d => {
+      const data = d.data();
+      if (data.empleadoId === user.uid) asignados += data.dias.length;
+    });
+    // Contar confirmados
+    const snapAsis = await getDocs(collection(db, "asistencias"));
+    let confirmados = 0;
+    snapAsis.docs.forEach(d => {
+      const data = d.data();
+      if (data.empleadoId === user.uid && data.confirmado && !data.esReemplazante) confirmados++;
+    });
+    setRatioPropio({ asignados, confirmados });
+  };
+
   const responderSolicitud = async (solicitud, aceptar) => {
     setProcesando(solicitud.id);
     try {
       if (aceptar) {
-        // Intercambiar los días en las asignaciones
-        // 1. Sacar el día del solicitante de su asignación y agregar el del receptor
         const snapAsigOrigen = await getDoc(doc(db, "asignaciones", solicitud.asigIdOrigen));
         const snapAsigDestino = await getDoc(doc(db, "asignaciones", solicitud.asigIdDestino));
-
         if (snapAsigOrigen.exists() && snapAsigDestino.exists()) {
           const diasOrigen = snapAsigOrigen.data().dias;
           const diasDestino = snapAsigDestino.data().dias;
-
-          // Encontrar los días específicos a intercambiar
           const diaAQuitar = diasOrigen.find(d => d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen);
           const diaADar = diasDestino.find(d => d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino);
-
           if (diaAQuitar && diaADar) {
-            // Actualizar asignación del solicitante: quitar su día, agregar el del receptor
-            const nuevosDiasOrigen = diasOrigen
-              .filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
+            const nuevosDiasOrigen = diasOrigen.filter(d => !(d.label === solicitud.labelOrigen && d.turno === solicitud.turnoOrigen));
             nuevosDiasOrigen.push(diaADar);
-
-            // Actualizar asignación del receptor: quitar su día, agregar el del solicitante
-            const nuevosDiasDestino = diasDestino
-              .filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
+            const nuevosDiasDestino = diasDestino.filter(d => !(d.label === solicitud.labelDestino && d.turno === solicitud.turnoDestino));
             nuevosDiasDestino.push(diaAQuitar);
-
             await updateDoc(doc(db, "asignaciones", solicitud.asigIdOrigen), { dias: nuevosDiasOrigen });
             await updateDoc(doc(db, "asignaciones", solicitud.asigIdDestino), { dias: nuevosDiasDestino });
           }
         }
       }
-
-      // Actualizar estado de la solicitud
       await updateDoc(doc(db, "solicitudesCambio", solicitud.id), {
         estado: aceptar ? "aceptado" : "rechazado",
         respondidoEn: new Date().toISOString(),
       });
-
       cargarSolicitudes();
     } catch (err) {
       alert("Error: " + err.message);
@@ -197,7 +207,6 @@ export default function Dashboard() {
 
   return (
     <div style={styles.container}>
-      {/* Banner notificación si hay solicitudes pendientes */}
       {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
         <div style={styles.banner} onClick={() => setSeccion("cambios")}>
           🔔 Tenés {solicitudesPendientes.length} solicitud{solicitudesPendientes.length > 1 ? "es" : ""} de cambio pendiente{solicitudesPendientes.length > 1 ? "s" : ""}. Tocá para ver.
@@ -208,9 +217,7 @@ export default function Dashboard() {
         <h1 style={styles.title}>solAPPe</h1>
         <div style={styles.headerRight}>
           {empleado && !mobile && (
-            <span style={styles.bienvenida}>
-              {empleado.apellido}, {empleado.nombre}
-            </span>
+            <span style={styles.bienvenida}>{empleado.apellido}, {empleado.nombre}</span>
           )}
           <button style={styles.logout} onClick={() => signOut(auth)}>
             {mobile ? "Salir" : "Cerrar sesión"}
@@ -238,9 +245,7 @@ export default function Dashboard() {
 
         {seccion === "inscripcion" && (
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>
-              Inscripción — {nombreMes} {anioProximo}
-            </h2>
+            <h2 style={styles.cardTitle}>Inscripción — {nombreMes} {anioProximo}</h2>
             {!inscripcionAbierta && !inscripcion && (
               <div style={styles.aviso}>
                 📅 Las inscripciones están cerradas por el momento.
@@ -271,12 +276,10 @@ export default function Dashboard() {
               <div>
                 <div style={styles.inscriptoBox}>
                   <p style={styles.inscriptoTexto}>
-                    ✓ Estás inscripto para{" "}
-                    <strong>{labelPreferencia(inscripcion.preferencia)}</strong>
+                    ✓ Estás inscripto para <strong>{labelPreferencia(inscripcion.preferencia)}</strong>
                   </p>
                   <p style={styles.inscriptoFecha}>
-                    Inscripto el{" "}
-                    {new Date(inscripcion.fechaInscripcion).toLocaleDateString("es-AR")}
+                    Inscripto el {new Date(inscripcion.fechaInscripcion).toLocaleDateString("es-AR")}
                   </p>
                 </div>
                 {inscripcionAbierta && (
@@ -300,9 +303,7 @@ export default function Dashboard() {
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>🔄 Solicitudes de cambio</h2>
             {solicitudesPendientes.length === 0 ? (
-              <div style={styles.aviso}>
-                No tenés solicitudes de cambio pendientes.
-              </div>
+              <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {solicitudesPendientes.map(s => {
@@ -317,32 +318,20 @@ export default function Dashboard() {
                         <div style={styles.solicitudDetalle}>
                           <div style={styles.solicitudDia}>
                             <span style={styles.solicitudLabel}>Te da:</span>
-                            <span style={styles.solicitudValor}>
-                              {s.labelOrigen} — {s.turnoOrigen}
-                            </span>
+                            <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
                           </div>
                           <div style={styles.solicitudFlecha}>⇄</div>
                           <div style={styles.solicitudDia}>
                             <span style={styles.solicitudLabel}>Toma tu:</span>
-                            <span style={styles.solicitudValor}>
-                              {s.labelDestino} — {s.turnoDestino}
-                            </span>
+                            <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
                           </div>
                         </div>
                       </div>
                       <div style={styles.solicitudBotones}>
-                        <button
-                          style={styles.botonAceptar}
-                          onClick={() => responderSolicitud(s, true)}
-                          disabled={procesando === s.id}
-                        >
+                        <button style={styles.botonAceptar} onClick={() => responderSolicitud(s, true)} disabled={procesando === s.id}>
                           {procesando === s.id ? "..." : "✓ Aceptar"}
                         </button>
-                        <button
-                          style={styles.botonRechazar}
-                          onClick={() => responderSolicitud(s, false)}
-                          disabled={procesando === s.id}
-                        >
+                        <button style={styles.botonRechazar} onClick={() => responderSolicitud(s, false)} disabled={procesando === s.id}>
                           ✕ Rechazar
                         </button>
                       </div>
@@ -356,12 +345,31 @@ export default function Dashboard() {
 
         {seccion === "cuenta" && (
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>Cambiar contraseña</h2>
+            <h2 style={styles.cardTitle}>🔑 Mi cuenta</h2>
             {empleado && (
               <p style={{ color: "#666", marginBottom: 16, fontSize: 14 }}>
-                Usuario: <strong>{empleado.apellido}, {empleado.nombre}</strong>
+                <strong>{empleado.apellido}, {empleado.nombre}</strong>
               </p>
             )}
+
+            {ratioPropio && (
+              <div style={styles.ratioBox}>
+                <span style={styles.ratioTitulo}>📊 Mis asistencias</span>
+                <span style={{
+                  ...styles.ratioNumero,
+                  color: ratioPropio.asignados === 0 ? "#999"
+                    : ratioPropio.confirmados === ratioPropio.asignados ? "#27ae60"
+                    : ratioPropio.confirmados === 0 ? "#e74c3c"
+                    : "#f39c12",
+                }}>
+                  {ratioPropio.confirmados} confirmadas / {ratioPropio.asignados} asignadas
+                </span>
+              </div>
+            )}
+
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1a1a2e", margin: "20px 0 12px" }}>
+              Cambiar contraseña
+            </h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
               <input style={styles.input} type="password" placeholder="Contraseña actual" value={passActual} onChange={e => setPassActual(e.target.value)} />
               <input style={styles.input} type="password" placeholder="Nueva contraseña" value={passNueva} onChange={e => setPassNueva(e.target.value)} />
@@ -387,8 +395,7 @@ const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
   banner: {
     background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283593",
-    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600,
-    cursor: "pointer",
+    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600, cursor: "pointer",
   },
   header: {
     background: "#1a1a2e", color: "white", padding: "12px 16px",
@@ -403,8 +410,7 @@ const styles = {
   },
   tabs: {
     display: "flex", background: "white",
-    borderBottom: "2px solid #f0f2f5", padding: "0 8px",
-    overflowX: "auto",
+    borderBottom: "2px solid #f0f2f5", padding: "0 8px", overflowX: "auto",
   },
   tab: {
     padding: "12px 14px", border: "none", background: "transparent",
@@ -430,8 +436,7 @@ const styles = {
     background: "white", fontSize: 15, textAlign: "left", color: "#333",
   },
   opcionActiva: {
-    border: "2px solid #1a1a2e", background: "#f0f2f5",
-    fontWeight: 600, color: "#1a1a2e",
+    border: "2px solid #1a1a2e", background: "#f0f2f5", fontWeight: 600, color: "#1a1a2e",
   },
   boton: {
     background: "#1a1a2e", color: "white", border: "none",
@@ -442,8 +447,7 @@ const styles = {
     padding: "10px 20px", borderRadius: 8, fontSize: 14, marginTop: 12,
   },
   inscriptoBox: {
-    background: "#eafaf1", border: "1px solid #27ae60",
-    borderRadius: 8, padding: 16, marginBottom: 12,
+    background: "#eafaf1", border: "1px solid #27ae60", borderRadius: 8, padding: 16, marginBottom: 12,
   },
   inscriptoTexto: { color: "#1e8449", fontWeight: 600, fontSize: 15 },
   inscriptoFecha: { color: "#666", fontSize: 13, marginTop: 4 },
@@ -453,15 +457,10 @@ const styles = {
     fontSize: 15, outline: "none", background: "white", color: "#1a1a2e",
     width: "100%", boxSizing: "border-box",
   },
-  solicitudCard: {
-    border: "1px solid #e8eaf6", borderRadius: 10, padding: 16,
-    background: "#f8f9ff",
-  },
+  solicitudCard: { border: "1px solid #e8eaf6", borderRadius: 10, padding: 16, background: "#f8f9ff" },
   solicitudInfo: { marginBottom: 12 },
   solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 10 },
-  solicitudDetalle: {
-    display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-  },
+  solicitudDetalle: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" },
   solicitudDia: { display: "flex", flexDirection: "column", gap: 2 },
   solicitudLabel: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase" },
   solicitudValor: { fontSize: 14, color: "#1a1a2e", fontWeight: 700 },
@@ -475,4 +474,11 @@ const styles = {
     background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
     padding: "8px 16px", borderRadius: 8, fontSize: 14, cursor: "pointer",
   },
+  ratioBox: {
+    background: "#f0f2f5", borderRadius: 10, padding: "14px 18px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    marginBottom: 8,
+  },
+  ratioTitulo: { fontSize: 14, fontWeight: 600, color: "#1a1a2e" },
+  ratioNumero: { fontSize: 15, fontWeight: 700 },
 };

@@ -40,6 +40,7 @@ export default function Admin() {
   const [asistencias, setAsistencias] = useState({});
   const [reemplazante, setReemplazante] = useState({});
   const [diaSeleccionado, setDiaSeleccionado] = useState(null);
+  const [ratios, setRatios] = useState({});
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -68,6 +69,7 @@ export default function Admin() {
     if (seccion === "resumen") cargarResumen();
     if (seccion === "cambios") cargarHistorial();
     if (seccion === "asistencia") cargarAsistencia();
+    if (seccion === "empleados") cargarRatios();
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -81,6 +83,37 @@ export default function Admin() {
     const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     lista.sort((a, b) => a.apellido.localeCompare(b.apellido));
     setEmpleados(lista);
+  };
+
+  const cargarRatios = async () => {
+    // Contar asignados por empleado (todos los meses)
+    const snapAsig = await getDocs(collection(db, "asignaciones"));
+    const asignados = {};
+    snapAsig.docs.forEach(d => {
+      const data = d.data();
+      if (!asignados[data.empleadoId]) asignados[data.empleadoId] = 0;
+      asignados[data.empleadoId] += data.dias.length;
+    });
+
+    // Contar confirmados por empleado
+    const snapAsis = await getDocs(collection(db, "asistencias"));
+    const confirmados = {};
+    snapAsis.docs.forEach(d => {
+      const data = d.data();
+      if (data.confirmado && !data.esReemplazante) {
+        if (!confirmados[data.empleadoId]) confirmados[data.empleadoId] = 0;
+        confirmados[data.empleadoId]++;
+      }
+    });
+
+    const mapa = {};
+    empleados.forEach(e => {
+      mapa[e.id] = {
+        asignados: asignados[e.id] || 0,
+        confirmados: confirmados[e.id] || 0,
+      };
+    });
+    setRatios(mapa);
   };
 
   const cargarEstadoInscripcion = async () => {
@@ -128,7 +161,6 @@ export default function Admin() {
   };
 
   const cargarAsistencia = async () => {
-    // Generar los últimos 3 días (hoy + 2 anteriores)
     const dias = [];
     for (let i = 0; i < 3; i++) {
       const fecha = new Date(ahora);
@@ -138,30 +170,21 @@ export default function Admin() {
       const anioNum = fecha.getFullYear();
       const label = `${diaNum}/${mesNum}`;
       const key = `${anioNum}-${mesNum}-${diaNum}`;
-
-      // Buscar asignados para ese día en asignaciones
       const snapAsig = await getDocs(collection(db, "asignaciones"));
       const asignados = [];
       snapAsig.docs.forEach(d => {
         const data = d.data();
         data.dias.forEach(dia => {
           const fechaDia = new Date(dia.fecha);
-          if (
-            fechaDia.getDate() === diaNum &&
-            fechaDia.getMonth() + 1 === mesNum &&
-            fechaDia.getFullYear() === anioNum
-          ) {
+          if (fechaDia.getDate() === diaNum && fechaDia.getMonth() + 1 === mesNum && fechaDia.getFullYear() === anioNum) {
             asignados.push({ empleadoId: data.empleadoId, turno: dia.turno, label: dia.label });
           }
         });
       });
-
       dias.push({ fecha, diaNum, mesNum, anioNum, label, key, asignados });
     }
     setDiasAsistencia(dias);
     setDiaSeleccionado(dias[0]?.key);
-
-    // Cargar asistencias guardadas
     const snapAsis = await getDocs(collection(db, "asistencias"));
     const mapaAsis = {};
     snapAsis.docs.forEach(d => { mapaAsis[d.id] = d.data(); });
@@ -489,6 +512,20 @@ export default function Admin() {
         .map(([k, v]) => ({ docId: k, ...v }))
     : [];
 
+  const renderRatio = (empId) => {
+    const r = ratios[empId];
+    if (!r) return null;
+    const color = r.asignados === 0 ? "#999"
+      : r.confirmados === r.asignados ? "#27ae60"
+      : r.confirmados === 0 ? "#e74c3c"
+      : "#f39c12";
+    return (
+      <span style={{ fontSize: 12, color, fontWeight: 600, marginLeft: 8 }}>
+        {r.confirmados}/{r.asignados} asistencias
+      </span>
+    );
+  };
+
   return (
     <div style={styles.container}>
       {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
@@ -548,10 +585,13 @@ export default function Admin() {
                   alignItems: mobile ? "flex-start" : "center",
                   gap: mobile ? 8 : 0,
                 }}>
-                  <div>
-                    <span style={styles.empleadoNombre}>{e.apellido}, {e.nombre}</span>
-                    {!mobile && <span style={styles.empleadoEmail}> — {e.email}</span>}
-                    {e.esAdmin && <span style={styles.badgeAdmin}>ADMIN</span>}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
+                      <span style={styles.empleadoNombre}>{e.apellido}, {e.nombre}</span>
+                      {e.esAdmin && <span style={styles.badgeAdmin}>ADMIN</span>}
+                      {renderRatio(e.id)}
+                    </div>
+                    {!mobile && <div style={styles.empleadoEmail}>{e.email}</div>}
                     {mobile && <div style={styles.empleadoEmail}>{e.email}</div>}
                   </div>
                   <div style={styles.rowBotones}>
@@ -670,8 +710,6 @@ export default function Admin() {
         {seccion === "asistencia" && (
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>✅ Control de asistencia</h2>
-
-            {/* Selector de día */}
             <div style={styles.diasSelectorRow}>
               {diasAsistencia.map(d => {
                 const nombreDia = d.fecha.toLocaleString("es-AR", { weekday: "short" });
@@ -679,10 +717,7 @@ export default function Admin() {
                 return (
                   <button
                     key={d.key}
-                    style={{
-                      ...styles.diaBtn,
-                      ...(diaSeleccionado === d.key ? styles.diaBtnActivo : {}),
-                    }}
+                    style={{ ...styles.diaBtn, ...(diaSeleccionado === d.key ? styles.diaBtnActivo : {}) }}
                     onClick={() => setDiaSeleccionado(d.key)}
                   >
                     <span style={{ fontSize: 11, textTransform: "capitalize" }}>{nombreDia}</span>
@@ -695,11 +730,9 @@ export default function Admin() {
 
             {diaActual && (
               <>
-                {/* Lista de asignados */}
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", margin: "16px 0 10px" }}>
                   Asignados para el {diaActual.label}
                 </h3>
-
                 {diaActual.asignados.length === 0 ? (
                   <div style={styles.aviso}>No hay empleados asignados para este día.</div>
                 ) : (
@@ -727,10 +760,7 @@ export default function Admin() {
                             </div>
                           </div>
                           <button
-                            style={{
-                              ...styles.botonSecundario,
-                              background: confirmado ? "#e74c3c" : "#27ae60",
-                            }}
+                            style={{ ...styles.botonSecundario, background: confirmado ? "#e74c3c" : "#27ae60" }}
                             onClick={() => toggleConfirmado(diaActual.key, a.empleadoId)}
                           >
                             {confirmado ? "Quitar" : "Confirmar"}
@@ -741,21 +771,15 @@ export default function Admin() {
                   </div>
                 )}
 
-                {/* Reemplazantes */}
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
                   Reemplazantes / adicionales
                 </h3>
-
                 {reemplazantesDelDia.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
                     {reemplazantesDelDia.map((r) => {
                       const emp = mapaEmpleados[r.empleadoId];
                       return (
-                        <div key={r.docId} style={{
-                          ...styles.asistenciaFila,
-                          background: "#e8f4fd",
-                          border: "1px solid #3f51b5",
-                        }}>
+                        <div key={r.docId} style={{ ...styles.asistenciaFila, background: "#e8f4fd", border: "1px solid #3f51b5" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                             <span style={{ fontSize: 20 }}>🔄</span>
                             <div>
@@ -765,10 +789,7 @@ export default function Admin() {
                               <span style={{ fontSize: 11, color: "#3f51b5" }}>Reemplazante</span>
                             </div>
                           </div>
-                          <button
-                            style={{ ...styles.botonEliminar }}
-                            onClick={() => borrarReemplazante(diaActual.key, r.empleadoId)}
-                          >
+                          <button style={{ ...styles.botonEliminar }} onClick={() => borrarReemplazante(diaActual.key, r.empleadoId)}>
                             Quitar
                           </button>
                         </div>
@@ -861,8 +882,7 @@ const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
   banner: {
     background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283593",
-    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600,
-    cursor: "pointer",
+    padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600, cursor: "pointer",
   },
   header: {
     background: "#c0392b", color: "white", padding: "12px 16px",
@@ -875,8 +895,7 @@ const styles = {
   },
   tabs: {
     display: "flex", background: "white",
-    borderBottom: "2px solid #f0f2f5", padding: "0 8px",
-    overflowX: "auto",
+    borderBottom: "2px solid #f0f2f5", padding: "0 8px", overflowX: "auto",
   },
   tab: {
     padding: "12px 14px", border: "none", background: "transparent",
@@ -919,10 +938,10 @@ const styles = {
     padding: "12px 0", borderBottom: "1px solid #f0f2f5",
   },
   empleadoNombre: { fontWeight: 600, fontSize: 14 },
-  empleadoEmail: { color: "#666", fontSize: 13 },
+  empleadoEmail: { color: "#666", fontSize: 13, marginTop: 2 },
   badgeAdmin: {
     background: "#c0392b", color: "white", fontSize: 11, fontWeight: 700,
-    padding: "2px 8px", borderRadius: 4, marginLeft: 8,
+    padding: "2px 8px", borderRadius: 4,
   },
   rowBotones: { display: "flex", gap: 8 },
   estadoRow: { display: "flex", alignItems: "center", gap: 16 },
@@ -942,9 +961,7 @@ const styles = {
   resumenNombre: { fontWeight: 600, fontSize: 14, color: "#1a1a2e", marginBottom: 6 },
   resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
   resumenChip: { fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500 },
-  solicitudCard: {
-    border: "1px solid #e8eaf6", borderRadius: 10, padding: 14, background: "#f8f9ff",
-  },
+  solicitudCard: { border: "1px solid #e8eaf6", borderRadius: 10, padding: 14, background: "#f8f9ff" },
   solicitudInfo: { marginBottom: 10 },
   solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 8 },
   solicitudDetalle: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" },
@@ -967,10 +984,7 @@ const styles = {
     padding: "10px 16px", borderRadius: 10, border: "1px solid #ddd",
     background: "white", cursor: "pointer", minWidth: 70, gap: 2,
   },
-  diaBtnActivo: {
-    background: "#1a1a2e", color: "white",
-    border: "1px solid #1a1a2e",
-  },
+  diaBtnActivo: { background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e" },
   asistenciaFila: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "10px 14px", borderRadius: 8,
