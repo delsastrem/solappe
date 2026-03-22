@@ -124,7 +124,6 @@ export default function Calendario({ esAdmin }) {
     return { turno, asignados };
   };
 
-  // Días del compañero — filtrando los días donde el usuario ya está asignado
   const diasDelComp = compSeleccionado
     ? Object.entries(mapaDias)
         .flatMap(([dia, asigs]) =>
@@ -132,15 +131,12 @@ export default function Calendario({ esAdmin }) {
             .filter(a => a.empleadoId === compSeleccionado)
             .map(a => ({ dia: parseInt(dia), ...a }))
         )
-        // BUGFIX: excluir días donde el solicitante ya está asignado
         .filter(d => !mapaDias[d.dia]?.some(a => a.empleadoId === user?.uid))
     : [];
 
-  // BUGFIX: al elegir compañero, excluir los que ya están en el mismo día del solicitante
   const compañerosDisponibles = Object.entries(empleados)
     .filter(([id]) => {
       if (id === user?.uid) return false;
-      // El compañero debe tener al menos un día que el solicitante no tenga
       const diasComp = Object.entries(mapaDias)
         .flatMap(([dia, asigs]) =>
           asigs.filter(a => a.empleadoId === id).map(a => parseInt(dia))
@@ -201,16 +197,27 @@ export default function Calendario({ esAdmin }) {
     if (!calendarioRef.current) return;
     setDescargando(true);
     try {
-      // Forzar vista calendario para la captura
       const vistaAnterior = vista;
       setVista("calendario");
       await new Promise(r => setTimeout(r, 300));
+
+      // Agregar marca de fecha temporalmente
+      const marca = document.createElement("div");
+      const fechaActual = new Date().toLocaleString("es-AR", {
+        day: "2-digit", month: "2-digit", year: "numeric",
+        hour: "2-digit", minute: "2-digit"
+      });
+      marca.style.cssText = "text-align:right;font-size:10px;color:#999;padding:4px 2px;font-family:sans-serif;";
+      marca.innerText = `Generado el ${fechaActual} — solAPPe`;
+      calendarioRef.current.appendChild(marca);
 
       const canvas = await html2canvas(calendarioRef.current, {
         backgroundColor: "#ffffff",
         scale: 2,
         useCORS: true,
       });
+
+      calendarioRef.current.removeChild(marca);
 
       const link = document.createElement("a");
       link.download = `solape-${nombreMes.replace(" ", "-")}.png`;
@@ -255,7 +262,6 @@ export default function Calendario({ esAdmin }) {
     );
   };
 
-  // ---- VISTA CALENDARIO ----
   const renderCalendario = () => {
     const celdas = [];
     for (let i = 0; i < primerLunes; i++) {
@@ -303,7 +309,6 @@ export default function Calendario({ esAdmin }) {
     return celdas;
   };
 
-  // ---- VISTA LISTA ----
   const renderLista = () => {
     const dias = [];
     for (let dia = 1; dia <= diasDelMes; dia++) {
@@ -356,38 +361,28 @@ export default function Calendario({ esAdmin }) {
     return dias;
   };
 
-  // ---- MODAL CAMBIO ----
   const renderModal = () => {
     if (!modalCambio) return null;
-
     return (
       <div style={styles.modalOverlay} onClick={cerrarModal}>
         <div style={styles.modal} onClick={e => e.stopPropagation()}>
           <h3 style={styles.modalTitulo}>🔄 Solicitar cambio de día</h3>
-
           <div style={styles.modalInfo}>
             <span style={styles.modalLabel}>Tu día:</span>
-            <span style={styles.modalValor}>
-              {modalCambio.labelOrigen} — {modalCambio.turnoOrigen}
-            </span>
+            <span style={styles.modalValor}>{modalCambio.labelOrigen} — {modalCambio.turnoOrigen}</span>
           </div>
 
           {paso === 1 && (
             <>
               <p style={styles.modalSubtitulo}>¿Con quién querés cambiar?</p>
               {compañerosDisponibles.length === 0 ? (
-                <p style={{ color: "#999", fontSize: 13 }}>
-                  No hay compañeros disponibles para cambiar este día.
-                </p>
+                <p style={{ color: "#999", fontSize: 13 }}>No hay compañeros disponibles para cambiar este día.</p>
               ) : (
                 <div style={styles.modalLista}>
                   {compañerosDisponibles.map(([id, emp]) => (
                     <button
                       key={id}
-                      style={{
-                        ...styles.modalOpcion,
-                        ...(compSeleccionado === id ? styles.modalOpcionActiva : {})
-                      }}
+                      style={{ ...styles.modalOpcion, ...(compSeleccionado === id ? styles.modalOpcionActiva : {}) }}
                       onClick={() => { setCompSeleccionado(id); setPaso(2); }}
                     >
                       {emp.apellido}, {emp.nombre}
@@ -404,9 +399,7 @@ export default function Calendario({ esAdmin }) {
                 ¿Qué día de {empleados[compSeleccionado]?.apellido} querés tomar?
               </p>
               {diasDelComp.length === 0 ? (
-                <p style={{ color: "#999", fontSize: 13 }}>
-                  No hay días disponibles para cambiar con este compañero.
-                </p>
+                <p style={{ color: "#999", fontSize: 13 }}>No hay días disponibles para cambiar con este compañero.</p>
               ) : (
                 <div style={styles.modalLista}>
                   {diasDelComp.map((d, i) => {
@@ -431,9 +424,7 @@ export default function Calendario({ esAdmin }) {
                 </div>
               )}
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button style={styles.modalBotonVolver} onClick={() => setPaso(1)}>
-                  ← Volver
-                </button>
+                <button style={styles.modalBotonVolver} onClick={() => setPaso(1)}>← Volver</button>
                 {diaCompSeleccionado && (
                   <button style={styles.modalBotonEnviar} onClick={enviarSolicitud} disabled={enviando}>
                     {enviando ? "Enviando..." : "Solicitar cambio"}
@@ -446,9 +437,7 @@ export default function Calendario({ esAdmin }) {
           {paso === 3 && (
             <div style={styles.modalExito}>
               <p style={{ color: "#27ae60", fontWeight: 600, fontSize: 15 }}>{mensajeCambio}</p>
-              <button style={styles.modalBotonEnviar} onClick={cerrarModal}>
-                Cerrar
-              </button>
+              <button style={styles.modalBotonEnviar} onClick={cerrarModal}>Cerrar</button>
             </div>
           )}
 
@@ -472,17 +461,15 @@ export default function Calendario({ esAdmin }) {
 
       <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         {!mobile && (
-          <>
-            {["calendario", "lista"].map(v => (
-              <button
-                key={v}
-                style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
-                onClick={() => setVista(v)}
-              >
-                {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
-              </button>
-            ))}
-          </>
+          ["calendario", "lista"].map(v => (
+            <button
+              key={v}
+              style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
+              onClick={() => setVista(v)}
+            >
+              {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
+            </button>
+          ))
         )}
         <button
           style={{ ...styles.toggleBtn, background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e" }}
@@ -513,13 +500,6 @@ export default function Calendario({ esAdmin }) {
       </div>
 
       <div ref={calendarioRef}>
-        {/* Título para la imagen descargada */}
-        <div style={{ textAlign: "center", marginBottom: 8, display: "none" }} id="cal-titulo">
-          <strong style={{ fontSize: 16, color: "#1a1a2e", textTransform: "capitalize" }}>
-            solAPPe — Solapes {nombreMes}
-          </strong>
-        </div>
-
         {vista === "calendario" && !mobile ? (
           <div style={styles.grid}>
             {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => (
@@ -548,7 +528,6 @@ const styles = {
     fontSize: 18, fontWeight: 700, color: "#1a1a2e",
     textTransform: "capitalize", minWidth: 160, textAlign: "center",
   },
-  toggleVista: { display: "flex", justifyContent: "center", gap: 8, marginBottom: 16 },
   toggleBtn: {
     padding: "8px 20px", borderRadius: 8, border: "1px solid #ddd",
     background: "white", fontSize: 14, color: "#666", cursor: "pointer",
