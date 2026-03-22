@@ -35,12 +35,14 @@ export default function Admin() {
   const [resumenQ2, setResumenQ2] = useState([]);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
   const [historialCambios, setHistorialCambios] = useState([]);
+  const [historialExpandido, setHistorialExpandido] = useState(false);
   const [procesando, setProcesando] = useState(null);
   const [diasAsistencia, setDiasAsistencia] = useState([]);
   const [asistencias, setAsistencias] = useState({});
   const [reemplazante, setReemplazante] = useState({});
   const [diaSeleccionado, setDiaSeleccionado] = useState(null);
   const [ratios, setRatios] = useState({});
+  const [ratioPropio, setRatioPropio] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -70,6 +72,7 @@ export default function Admin() {
     if (seccion === "cambios") cargarHistorial();
     if (seccion === "asistencia") cargarAsistencia();
     if (seccion === "empleados") cargarRatios();
+    if (seccion === "cuenta") cargarRatioPropio();
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -86,7 +89,6 @@ export default function Admin() {
   };
 
   const cargarRatios = async () => {
-    // Contar asignados por empleado (todos los meses)
     const snapAsig = await getDocs(collection(db, "asignaciones"));
     const asignados = {};
     snapAsig.docs.forEach(d => {
@@ -94,8 +96,6 @@ export default function Admin() {
       if (!asignados[data.empleadoId]) asignados[data.empleadoId] = 0;
       asignados[data.empleadoId] += data.dias.length;
     });
-
-    // Contar confirmados por empleado
     const snapAsis = await getDocs(collection(db, "asistencias"));
     const confirmados = {};
     snapAsis.docs.forEach(d => {
@@ -105,7 +105,6 @@ export default function Admin() {
         confirmados[data.empleadoId]++;
       }
     });
-
     const mapa = {};
     empleados.forEach(e => {
       mapa[e.id] = {
@@ -114,6 +113,23 @@ export default function Admin() {
       };
     });
     setRatios(mapa);
+  };
+
+  const cargarRatioPropio = async () => {
+    if (!user) return;
+    const snapAsig = await getDocs(collection(db, "asignaciones"));
+    let asignados = 0;
+    snapAsig.docs.forEach(d => {
+      const data = d.data();
+      if (data.empleadoId === user.uid) asignados += data.dias.length;
+    });
+    const snapAsis = await getDocs(collection(db, "asistencias"));
+    let confirmados = 0;
+    snapAsis.docs.forEach(d => {
+      const data = d.data();
+      if (data.empleadoId === user.uid && data.confirmado) confirmados++;
+    });
+    setRatioPropio({ asignados, confirmados });
   };
 
   const cargarEstadoInscripcion = async () => {
@@ -143,6 +159,7 @@ export default function Admin() {
       .filter(s => s.estado !== "pendiente")
       .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn));
     setHistorialCambios(todas);
+    setHistorialExpandido(false);
   };
 
   const cargarResumen = async () => {
@@ -470,24 +487,16 @@ export default function Admin() {
                 background: s.estado === "aceptado" ? "#eafaf1" : "#fdf2f2",
                 color: s.estado === "aceptado" ? "#27ae60" : "#e74c3c",
               }}>
-                {s.estado === "aceptado" ? "✓ Aceptado" : "✕ Rechazado"}
+                {s.estado === "aceptado" ? "✓" : "✕"}
               </span>
             )}
           </div>
-          <div style={styles.solicitudDetalle}>
-            <div style={styles.solicitudDia}>
-              <span style={styles.solicitudLabel}>Da:</span>
-              <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
-            </div>
-            <div style={styles.solicitudFlecha}>⇄</div>
-            <div style={styles.solicitudDia}>
-              <span style={styles.solicitudLabel}>Recibe:</span>
-              <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
-            </div>
+          <div style={{ fontSize: 12, color: "#666" }}>
+            {s.labelOrigen} ({s.turnoOrigen}) ⇄ {s.labelDestino} ({s.turnoDestino})
           </div>
           {!conBotones && s.respondidoEn && (
-            <p style={{ fontSize: 11, color: "#999", marginTop: 6 }}>
-              {new Date(s.respondidoEn).toLocaleDateString("es-AR")} {new Date(s.respondidoEn).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
+            <p style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+              {new Date(s.respondidoEn).toLocaleDateString("es-AR")}
             </p>
           )}
         </div>
@@ -525,6 +534,11 @@ export default function Admin() {
       </span>
     );
   };
+
+  // Historial: mostrar los primeros 5, expandir para ver hasta 10
+  const historialVisible = historialExpandido
+    ? historialCambios.slice(0, 10)
+    : historialCambios.slice(0, 5);
 
   return (
     <div style={styles.container}>
@@ -591,8 +605,7 @@ export default function Admin() {
                       {e.esAdmin && <span style={styles.badgeAdmin}>ADMIN</span>}
                       {renderRatio(e.id)}
                     </div>
-                    {!mobile && <div style={styles.empleadoEmail}>{e.email}</div>}
-                    {mobile && <div style={styles.empleadoEmail}>{e.email}</div>}
+                    <div style={styles.empleadoEmail}>{e.email}</div>
                   </div>
                   <div style={styles.rowBotones}>
                     <button style={styles.botonSecundario} onClick={() => hacerAdmin(e.id, e.esAdmin)}>
@@ -836,14 +849,33 @@ export default function Admin() {
                 </div>
               )}
             </div>
+
             <div style={styles.card}>
-              <h2 style={styles.cardTitle}>📋 Historial de cambios</h2>
+              <h2 style={styles.cardTitle}>
+                📋 Historial de cambios
+                <span style={{ fontSize: 12, fontWeight: 400, color: "#999", marginLeft: 8 }}>
+                  ({historialCambios.length} total)
+                </span>
+              </h2>
               {historialCambios.length === 0 ? (
                 <div style={styles.aviso}>Todavía no hay cambios registrados.</div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {historialCambios.map(s => renderSolicitudCard(s, false))}
-                </div>
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {historialVisible.map(s => renderSolicitudCard(s, false))}
+                  </div>
+                  {historialCambios.length > 5 && (
+                    <button
+                      style={{ ...styles.botonVerMas }}
+                      onClick={() => setHistorialExpandido(!historialExpandido)}
+                    >
+                      {historialExpandido
+                        ? "▲ Ver menos"
+                        : `▼ Ver más (${Math.min(historialCambios.length - 5, 5)} más)`
+                      }
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </>
@@ -851,12 +883,31 @@ export default function Admin() {
 
         {seccion === "cuenta" && (
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>Cambiar contraseña</h2>
+            <h2 style={styles.cardTitle}>🔑 Mi cuenta</h2>
             {empleadoActual && (
               <p style={{ color: "#666", marginBottom: 16, fontSize: 14 }}>
-                Usuario: <strong>{empleadoActual.apellido}, {empleadoActual.nombre}</strong>
+                <strong>{empleadoActual.apellido}, {empleadoActual.nombre}</strong>
               </p>
             )}
+
+            {ratioPropio && (
+              <div style={styles.ratioBox}>
+                <span style={styles.ratioTitulo}>📊 Mis asistencias</span>
+                <span style={{
+                  ...styles.ratioNumero,
+                  color: ratioPropio.asignados === 0 ? "#999"
+                    : ratioPropio.confirmados === ratioPropio.asignados ? "#27ae60"
+                    : ratioPropio.confirmados === 0 ? "#e74c3c"
+                    : "#f39c12",
+                }}>
+                  {ratioPropio.confirmados} confirmadas / {ratioPropio.asignados} asignadas
+                </span>
+              </div>
+            )}
+
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1a1a2e", margin: "20px 0 12px" }}>
+              Cambiar contraseña
+            </h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 400 }}>
               <input style={styles.input} type="password" placeholder="Contraseña actual" value={passActual} onChange={e => setPassActual(e.target.value)} />
               <input style={styles.input} type="password" placeholder="Nueva contraseña" value={passNueva} onChange={e => setPassNueva(e.target.value)} />
@@ -928,6 +979,11 @@ const styles = {
     background: "#e74c3c", color: "white", border: "none",
     padding: "6px 12px", borderRadius: 6, fontSize: 13,
   },
+  botonVerMas: {
+    width: "100%", marginTop: 10, padding: "8px", borderRadius: 8,
+    border: "1px solid #ddd", background: "white", fontSize: 13,
+    color: "#666", cursor: "pointer",
+  },
   mensajeOk: { marginBottom: 12, color: "#27ae60", fontWeight: 500 },
   aviso: {
     background: "#fef9e7", border: "1px solid #f39c12",
@@ -961,14 +1017,14 @@ const styles = {
   resumenNombre: { fontWeight: 600, fontSize: 14, color: "#1a1a2e", marginBottom: 6 },
   resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
   resumenChip: { fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500 },
-  solicitudCard: { border: "1px solid #e8eaf6", borderRadius: 10, padding: 14, background: "#f8f9ff" },
-  solicitudInfo: { marginBottom: 10 },
-  solicitudTitulo: { fontSize: 14, color: "#1a1a2e", marginBottom: 8 },
+  solicitudCard: { border: "1px solid #e8eaf6", borderRadius: 10, padding: 12, background: "#f8f9ff" },
+  solicitudInfo: { marginBottom: 8 },
+  solicitudTitulo: { fontSize: 13, color: "#1a1a2e", marginBottom: 6 },
   solicitudDetalle: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" },
   solicitudDia: { display: "flex", flexDirection: "column", gap: 2 },
   solicitudLabel: { fontSize: 11, color: "#666", fontWeight: 600, textTransform: "uppercase" },
-  solicitudValor: { fontSize: 14, color: "#1a1a2e", fontWeight: 700 },
-  solicitudFlecha: { fontSize: 20, color: "#3f51b5", fontWeight: 700 },
+  solicitudValor: { fontSize: 13, color: "#1a1a2e", fontWeight: 700 },
+  solicitudFlecha: { fontSize: 18, color: "#3f51b5", fontWeight: 700 },
   solicitudBotones: { display: "flex", gap: 8 },
   botonAceptar: {
     background: "#27ae60", color: "white", border: "none",
@@ -989,4 +1045,11 @@ const styles = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "10px 14px", borderRadius: 8,
   },
+  ratioBox: {
+    background: "#f0f2f5", borderRadius: 10, padding: "14px 18px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    marginBottom: 8,
+  },
+  ratioTitulo: { fontSize: 14, fontWeight: 600, color: "#1a1a2e" },
+  ratioNumero: { fontSize: 15, fontWeight: 700 },
 };

@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [loadingPass, setLoadingPass] = useState(false);
   const [mobile, setMobile] = useState(window.innerWidth < 640);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
+  const [historialPropio, setHistorialPropio] = useState([]);
   const [empleados, setEmpleados] = useState({});
   const [procesando, setProcesando] = useState(null);
   const [ratioPropio, setRatioPropio] = useState(null);
@@ -43,10 +44,12 @@ export default function Dashboard() {
     cargarEmpleados();
     cargarSolicitudes();
     cargarRatioPropio();
+    cargarHistorialPropio();
   }, []);
 
   useEffect(() => {
     if (seccion === "cuenta") cargarRatioPropio();
+    if (seccion === "cambios") cargarHistorialPropio();
   }, [seccion]);
 
   const cargarDatos = async () => {
@@ -76,16 +79,28 @@ export default function Dashboard() {
     setSolicitudesPendientes(lista);
   };
 
+  const cargarHistorialPropio = async () => {
+    if (!user) return;
+    const snap = await getDocs(collection(db, "solicitudesCambio"));
+    const lista = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(s =>
+        s.estado !== "pendiente" &&
+        (s.solicitanteId === user.uid || s.receptorId === user.uid)
+      )
+      .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn))
+      .slice(0, 10);
+    setHistorialPropio(lista);
+  };
+
   const cargarRatioPropio = async () => {
     if (!user) return;
-    // Contar asignados
     const snapAsig = await getDocs(collection(db, "asignaciones"));
     let asignados = 0;
     snapAsig.docs.forEach(d => {
       const data = d.data();
       if (data.empleadoId === user.uid) asignados += data.dias.length;
     });
-    // Contar confirmados
     const snapAsis = await getDocs(collection(db, "asistencias"));
     let confirmados = 0;
     snapAsis.docs.forEach(d => {
@@ -121,6 +136,7 @@ export default function Dashboard() {
         respondidoEn: new Date().toISOString(),
       });
       cargarSolicitudes();
+      cargarHistorialPropio();
     } catch (err) {
       alert("Error: " + err.message);
     }
@@ -203,6 +219,42 @@ export default function Dashboard() {
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
     return "🔑 Mi cuenta";
+  };
+
+  const renderHistorialItem = (s) => {
+    const solicitante = empleados[s.solicitanteId];
+    const receptor = empleados[s.receptorId];
+    const esMiSolicitud = s.solicitanteId === user.uid;
+    return (
+      <div key={s.id} style={{
+        ...styles.historialItem,
+        borderLeft: `3px solid ${s.estado === "aceptado" ? "#27ae60" : "#e74c3c"}`,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <span style={{ fontSize: 13, color: "#1a1a2e" }}>
+            {esMiSolicitud
+              ? <><strong>Pediste</strong> cambiar con {receptor ? `${receptor.apellido}, ${receptor.nombre}` : "..."}</>
+              : <><strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong> te pidió cambiar</>
+            }
+          </span>
+          <span style={{
+            fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 6,
+            background: s.estado === "aceptado" ? "#eafaf1" : "#fdf2f2",
+            color: s.estado === "aceptado" ? "#27ae60" : "#e74c3c",
+          }}>
+            {s.estado === "aceptado" ? "✓ Aceptado" : "✕ Rechazado"}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+          {s.labelOrigen} ({s.turnoOrigen}) ⇄ {s.labelDestino} ({s.turnoDestino})
+        </div>
+        {s.respondidoEn && (
+          <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>
+            {new Date(s.respondidoEn).toLocaleDateString("es-AR")}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -300,47 +352,60 @@ export default function Dashboard() {
         )}
 
         {seccion === "cambios" && (
-          <div style={styles.card}>
-            <h2 style={styles.cardTitle}>🔄 Solicitudes de cambio</h2>
-            {solicitudesPendientes.length === 0 ? (
-              <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {solicitudesPendientes.map(s => {
-                  const solicitante = empleados[s.solicitanteId];
-                  return (
-                    <div key={s.id} style={styles.solicitudCard}>
-                      <div style={styles.solicitudInfo}>
-                        <p style={styles.solicitudTitulo}>
-                          <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
-                          {" "}quiere cambiar contigo
-                        </p>
-                        <div style={styles.solicitudDetalle}>
-                          <div style={styles.solicitudDia}>
-                            <span style={styles.solicitudLabel}>Te da:</span>
-                            <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
-                          </div>
-                          <div style={styles.solicitudFlecha}>⇄</div>
-                          <div style={styles.solicitudDia}>
-                            <span style={styles.solicitudLabel}>Toma tu:</span>
-                            <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
+          <>
+            <div style={styles.card}>
+              <h2 style={styles.cardTitle}>🔄 Solicitudes pendientes</h2>
+              {solicitudesPendientes.length === 0 ? (
+                <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {solicitudesPendientes.map(s => {
+                    const solicitante = empleados[s.solicitanteId];
+                    return (
+                      <div key={s.id} style={styles.solicitudCard}>
+                        <div style={styles.solicitudInfo}>
+                          <p style={styles.solicitudTitulo}>
+                            <strong>{solicitante ? `${solicitante.apellido}, ${solicitante.nombre}` : "..."}</strong>
+                            {" "}quiere cambiar contigo
+                          </p>
+                          <div style={styles.solicitudDetalle}>
+                            <div style={styles.solicitudDia}>
+                              <span style={styles.solicitudLabel}>Te da:</span>
+                              <span style={styles.solicitudValor}>{s.labelOrigen} — {s.turnoOrigen}</span>
+                            </div>
+                            <div style={styles.solicitudFlecha}>⇄</div>
+                            <div style={styles.solicitudDia}>
+                              <span style={styles.solicitudLabel}>Toma tu:</span>
+                              <span style={styles.solicitudValor}>{s.labelDestino} — {s.turnoDestino}</span>
+                            </div>
                           </div>
                         </div>
+                        <div style={styles.solicitudBotones}>
+                          <button style={styles.botonAceptar} onClick={() => responderSolicitud(s, true)} disabled={procesando === s.id}>
+                            {procesando === s.id ? "..." : "✓ Aceptar"}
+                          </button>
+                          <button style={styles.botonRechazar} onClick={() => responderSolicitud(s, false)} disabled={procesando === s.id}>
+                            ✕ Rechazar
+                          </button>
+                        </div>
                       </div>
-                      <div style={styles.solicitudBotones}>
-                        <button style={styles.botonAceptar} onClick={() => responderSolicitud(s, true)} disabled={procesando === s.id}>
-                          {procesando === s.id ? "..." : "✓ Aceptar"}
-                        </button>
-                        <button style={styles.botonRechazar} onClick={() => responderSolicitud(s, false)} disabled={procesando === s.id}>
-                          ✕ Rechazar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div style={styles.card}>
+              <h2 style={styles.cardTitle}>📋 Mis últimos cambios</h2>
+              {historialPropio.length === 0 ? (
+                <div style={styles.aviso}>No tenés cambios registrados todavía.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {historialPropio.map(s => renderHistorialItem(s))}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
         {seccion === "cuenta" && (
@@ -351,7 +416,6 @@ export default function Dashboard() {
                 <strong>{empleado.apellido}, {empleado.nombre}</strong>
               </p>
             )}
-
             {ratioPropio && (
               <div style={styles.ratioBox}>
                 <span style={styles.ratioTitulo}>📊 Mis asistencias</span>
@@ -366,7 +430,6 @@ export default function Dashboard() {
                 </span>
               </div>
             )}
-
             <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1a1a2e", margin: "20px 0 12px" }}>
               Cambiar contraseña
             </h3>
@@ -473,6 +536,10 @@ const styles = {
   botonRechazar: {
     background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
     padding: "8px 16px", borderRadius: 8, fontSize: 14, cursor: "pointer",
+  },
+  historialItem: {
+    background: "white", borderRadius: 8, padding: "10px 14px",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
   },
   ratioBox: {
     background: "#f0f2f5", borderRadius: 10, padding: "14px 18px",
