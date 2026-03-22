@@ -41,6 +41,7 @@ export default function Calendario({ esAdmin }) {
     const handleResize = () => {
       const m = isMobile();
       setMobile(m);
+      if (m) setVista("lista");
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
@@ -200,6 +201,7 @@ export default function Calendario({ esAdmin }) {
       setVista("calendario");
       await new Promise(r => setTimeout(r, 300));
 
+      // Agregar marca de fecha temporalmente
       const marca = document.createElement("div");
       const fechaActual = new Date().toLocaleString("es-AR", {
         day: "2-digit", month: "2-digit", year: "numeric",
@@ -458,15 +460,17 @@ export default function Calendario({ esAdmin }) {
       </div>
 
       <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        {["calendario", "lista"].map(v => (
-          <button
-            key={v}
-            style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
-            onClick={() => setVista(v)}
-          >
-            {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
-          </button>
-        ))}
+        {!mobile && (
+          ["calendario", "lista"].map(v => (
+            <button
+              key={v}
+              style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
+              onClick={() => setVista(v)}
+            >
+              {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
+            </button>
+          ))
+        )}
         <button
           style={{ ...styles.toggleBtn, background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e" }}
           onClick={descargarCalendario}
@@ -496,7 +500,7 @@ export default function Calendario({ esAdmin }) {
       </div>
 
       <div ref={calendarioRef}>
-        {vista === "calendario" ? (
+        {vista === "calendario" && !mobile ? (
           <div style={styles.grid}>
             {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => (
               <div key={d} style={styles.headerDia}>{d}</div>
