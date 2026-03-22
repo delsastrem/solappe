@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db, auth } from "../firebase";
 import { collection, getDocs, addDoc } from "firebase/firestore";
 import { getTurnoParaDia } from "../utils/distribucion";
+import html2canvas from "html2canvas";
 
 const COLORES_TURNO = {
   mañana: { bg: "#fff8e1", border: "#f39c12", texto: "#856404", label: "☀️ Mañana" },
@@ -18,6 +19,7 @@ export default function Calendario({ esAdmin }) {
   const [asistencias, setAsistencias] = useState({});
   const [vista, setVista] = useState(isMobile() ? "lista" : "calendario");
   const [mobile, setMobile] = useState(isMobile());
+  const [descargando, setDescargando] = useState(false);
 
   const [modalCambio, setModalCambio] = useState(null);
   const [paso, setPaso] = useState(1);
@@ -26,6 +28,7 @@ export default function Calendario({ esAdmin }) {
   const [enviando, setEnviando] = useState(false);
   const [mensajeCambio, setMensajeCambio] = useState("");
 
+  const calendarioRef = useRef(null);
   const user = auth.currentUser;
   const ahora = new Date();
   const [mes, setMes] = useState(ahora.getMonth() + 1);
@@ -74,13 +77,11 @@ export default function Calendario({ esAdmin }) {
     setAsistencias(mapa);
   };
 
-  // Verificar si un empleado está confirmado para un día
   const estaConfirmado = (dia, empleadoId) => {
     const key = `${anio}-${mes}-${dia}_${empleadoId}`;
     return asistencias[key]?.confirmado === true;
   };
 
-  // Verificar si hay reemplazantes para un día
   const getReemplazantes = (dia) => {
     const prefix = `${anio}-${mes}-${dia}_`;
     return Object.entries(asistencias)
@@ -123,6 +124,7 @@ export default function Calendario({ esAdmin }) {
     return { turno, asignados };
   };
 
+  // Días del compañero — filtrando los días donde el usuario ya está asignado
   const diasDelComp = compSeleccionado
     ? Object.entries(mapaDias)
         .flatMap(([dia, asigs]) =>
@@ -130,7 +132,23 @@ export default function Calendario({ esAdmin }) {
             .filter(a => a.empleadoId === compSeleccionado)
             .map(a => ({ dia: parseInt(dia), ...a }))
         )
+        // BUGFIX: excluir días donde el solicitante ya está asignado
+        .filter(d => !mapaDias[d.dia]?.some(a => a.empleadoId === user?.uid))
     : [];
+
+  // BUGFIX: al elegir compañero, excluir los que ya están en el mismo día del solicitante
+  const compañerosDisponibles = Object.entries(empleados)
+    .filter(([id]) => {
+      if (id === user?.uid) return false;
+      // El compañero debe tener al menos un día que el solicitante no tenga
+      const diasComp = Object.entries(mapaDias)
+        .flatMap(([dia, asigs]) =>
+          asigs.filter(a => a.empleadoId === id).map(a => parseInt(dia))
+        )
+        .filter(dia => !mapaDias[dia]?.some(a => a.empleadoId === user?.uid));
+      return diasComp.length > 0;
+    })
+    .sort(([, a], [, b]) => a.apellido.localeCompare(b.apellido));
 
   const abrirModal = (diaOrigen, turnoOrigen, labelOrigen, asigId) => {
     if (esAdmin) return;
@@ -177,6 +195,33 @@ export default function Calendario({ esAdmin }) {
       setMensajeCambio("Error al enviar: " + err.message);
     }
     setEnviando(false);
+  };
+
+  const descargarCalendario = async () => {
+    if (!calendarioRef.current) return;
+    setDescargando(true);
+    try {
+      // Forzar vista calendario para la captura
+      const vistaAnterior = vista;
+      setVista("calendario");
+      await new Promise(r => setTimeout(r, 300));
+
+      const canvas = await html2canvas(calendarioRef.current, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+      });
+
+      const link = document.createElement("a");
+      link.download = `solape-${nombreMes.replace(" ", "-")}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+
+      setVista(vistaAnterior);
+    } catch (err) {
+      alert("Error al descargar: " + err.message);
+    }
+    setDescargando(false);
   };
 
   const renderChip = (a, i, dia, esLista = false) => {
@@ -314,9 +359,6 @@ export default function Calendario({ esAdmin }) {
   // ---- MODAL CAMBIO ----
   const renderModal = () => {
     if (!modalCambio) return null;
-    const compañeros = Object.entries(empleados)
-      .filter(([id]) => id !== user.uid)
-      .sort(([, a], [, b]) => a.apellido.localeCompare(b.apellido));
 
     return (
       <div style={styles.modalOverlay} onClick={cerrarModal}>
@@ -333,20 +375,26 @@ export default function Calendario({ esAdmin }) {
           {paso === 1 && (
             <>
               <p style={styles.modalSubtitulo}>¿Con quién querés cambiar?</p>
-              <div style={styles.modalLista}>
-                {compañeros.map(([id, emp]) => (
-                  <button
-                    key={id}
-                    style={{
-                      ...styles.modalOpcion,
-                      ...(compSeleccionado === id ? styles.modalOpcionActiva : {})
-                    }}
-                    onClick={() => { setCompSeleccionado(id); setPaso(2); }}
-                  >
-                    {emp.apellido}, {emp.nombre}
-                  </button>
-                ))}
-              </div>
+              {compañerosDisponibles.length === 0 ? (
+                <p style={{ color: "#999", fontSize: 13 }}>
+                  No hay compañeros disponibles para cambiar este día.
+                </p>
+              ) : (
+                <div style={styles.modalLista}>
+                  {compañerosDisponibles.map(([id, emp]) => (
+                    <button
+                      key={id}
+                      style={{
+                        ...styles.modalOpcion,
+                        ...(compSeleccionado === id ? styles.modalOpcionActiva : {})
+                      }}
+                      onClick={() => { setCompSeleccionado(id); setPaso(2); }}
+                    >
+                      {emp.apellido}, {emp.nombre}
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
 
@@ -357,7 +405,7 @@ export default function Calendario({ esAdmin }) {
               </p>
               {diasDelComp.length === 0 ? (
                 <p style={{ color: "#999", fontSize: 13 }}>
-                  Este compañero no tiene días asignados en este mes.
+                  No hay días disponibles para cambiar con este compañero.
                 </p>
               ) : (
                 <div style={styles.modalLista}>
@@ -422,19 +470,28 @@ export default function Calendario({ esAdmin }) {
         <button style={styles.navBtn} onClick={() => cambiarMes(1)}>▶</button>
       </div>
 
-      {!mobile && (
-        <div style={styles.toggleVista}>
-          {["calendario", "lista"].map(v => (
-            <button
-              key={v}
-              style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
-              onClick={() => setVista(v)}
-            >
-              {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
-            </button>
-          ))}
-        </div>
-      )}
+      <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {!mobile && (
+          <>
+            {["calendario", "lista"].map(v => (
+              <button
+                key={v}
+                style={{ ...styles.toggleBtn, ...(vista === v ? styles.toggleActivo : {}) }}
+                onClick={() => setVista(v)}
+              >
+                {v === "calendario" ? "📅 Calendario" : "📋 Lista"}
+              </button>
+            ))}
+          </>
+        )}
+        <button
+          style={{ ...styles.toggleBtn, background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e" }}
+          onClick={descargarCalendario}
+          disabled={descargando}
+        >
+          {descargando ? "Generando..." : "⬇️ Descargar imagen"}
+        </button>
+      </div>
 
       {!esAdmin && (
         <div style={styles.avisocambio}>
@@ -455,18 +512,27 @@ export default function Calendario({ esAdmin }) {
         </div>
       </div>
 
-      {vista === "calendario" && !mobile ? (
-        <div style={styles.grid}>
-          {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => (
-            <div key={d} style={styles.headerDia}>{d}</div>
-          ))}
-          {renderCalendario()}
+      <div ref={calendarioRef}>
+        {/* Título para la imagen descargada */}
+        <div style={{ textAlign: "center", marginBottom: 8, display: "none" }} id="cal-titulo">
+          <strong style={{ fontSize: 16, color: "#1a1a2e", textTransform: "capitalize" }}>
+            solAPPe — Solapes {nombreMes}
+          </strong>
         </div>
-      ) : (
-        <div style={styles.listaContainer}>
-          {renderLista()}
-        </div>
-      )}
+
+        {vista === "calendario" && !mobile ? (
+          <div style={styles.grid}>
+            {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => (
+              <div key={d} style={styles.headerDia}>{d}</div>
+            ))}
+            {renderCalendario()}
+          </div>
+        ) : (
+          <div style={styles.listaContainer}>
+            {renderLista()}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -485,7 +551,7 @@ const styles = {
   toggleVista: { display: "flex", justifyContent: "center", gap: 8, marginBottom: 16 },
   toggleBtn: {
     padding: "8px 20px", borderRadius: 8, border: "1px solid #ddd",
-    background: "white", fontSize: 14, color: "#666",
+    background: "white", fontSize: 14, color: "#666", cursor: "pointer",
   },
   toggleActivo: { background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e", fontWeight: 600 },
   avisocambio: {
@@ -508,9 +574,7 @@ const styles = {
     padding: "1px 4px", fontSize: 10, color: "#333",
     display: "inline-block",
   },
-  chipMio: {
-    background: "#1a1a2e", color: "white", fontWeight: 600,
-  },
+  chipMio: { background: "#1a1a2e", color: "white", fontWeight: 600 },
   chipConfirmado: {
     background: "#d4edda", color: "#1e8449", fontWeight: 600,
     border: "1px solid #27ae60",
