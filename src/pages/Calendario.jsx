@@ -53,6 +53,10 @@ export default function Calendario({ esAdmin }) {
   }, [mes, anio]);
 
   useEffect(() => {
+    cargarAsistencias();
+  }, []);
+
+  useEffect(() => {
     const cargarEmpleados = async () => {
       const snap = await getDocs(collection(db, "empleados"));
       const mapa = {};
@@ -85,7 +89,7 @@ export default function Calendario({ esAdmin }) {
   const getReemplazantes = (dia) => {
     const prefix = `${anio}-${mes}-${dia}_`;
     return Object.entries(asistencias)
-      .filter(([k, v]) => k.startsWith(prefix) && v.esReemplazante)
+      .filter(([k, v]) => k.startsWith(prefix) && v.esReemplazante === true)
       .map(([, v]) => v);
   };
 
@@ -201,7 +205,6 @@ export default function Calendario({ esAdmin }) {
       setVista("calendario");
       await new Promise(r => setTimeout(r, 300));
 
-      // Agregar marca de fecha temporalmente
       const marca = document.createElement("div");
       const fechaActual = new Date().toLocaleString("es-AR", {
         day: "2-digit", month: "2-digit", year: "numeric",
@@ -287,7 +290,7 @@ export default function Calendario({ esAdmin }) {
               {turno !== "franco" ? turno : "F"}
             </span>
           </div>
-          {asignados.length > 0 && (
+          {(asignados.length > 0 || reemplazantes.length > 0) && (
             <div style={styles.asignadosList}>
               {asignados
                 .sort((a, b) => a.turno.localeCompare(b.turno))
@@ -313,11 +316,11 @@ export default function Calendario({ esAdmin }) {
     const dias = [];
     for (let dia = 1; dia <= diasDelMes; dia++) {
       const { turno, asignados } = getDiaInfo(dia);
-      if (asignados.length === 0 && turno === "franco") continue;
+      const reemplazantes = getReemplazantes(dia);
+      if (asignados.length === 0 && reemplazantes.length === 0 && turno === "franco") continue;
       const color = COLORES_TURNO[turno];
       const fecha = new Date(anio, mes - 1, dia);
       const nombreDia = fecha.toLocaleString("es-AR", { weekday: "short" });
-      const reemplazantes = getReemplazantes(dia);
       const hayConfirmados = asignados.some(a => estaConfirmado(dia, a.empleadoId)) || reemplazantes.length > 0;
 
       dias.push(
@@ -336,7 +339,7 @@ export default function Calendario({ esAdmin }) {
             </div>
           </div>
           <div style={styles.listaEmpleados}>
-            {asignados.length === 0 ? (
+            {asignados.length === 0 && reemplazantes.length === 0 ? (
               <span style={{ color: "#999", fontSize: 13 }}>Sin asignados</span>
             ) : (
               <>
@@ -496,6 +499,10 @@ export default function Calendario({ esAdmin }) {
         <div style={styles.leyendaItem}>
           <div style={{ width: 10, height: 10, borderRadius: 3, background: "#27ae60" }} />
           <span style={{ fontSize: 12, color: "#555" }}>✓ Confirmado</span>
+        </div>
+        <div style={styles.leyendaItem}>
+          <div style={{ width: 10, height: 10, borderRadius: 3, background: "#3f51b5" }} />
+          <span style={{ fontSize: 12, color: "#555" }}>🔄 Reemplazante</span>
         </div>
       </div>
 
