@@ -42,31 +42,6 @@ export function getRequerimiento(turno) {
   return turno === "tarde" ? 3 : 4;
 }
 
-// Intenta maximizar la diversidad de especialidades en cada quincena
-function balancearPorEspecialidad(lista, mapaEspecialidades) {
-  // Agrupa por especialidad
-  const grupos = {};
-  lista.forEach(emp => {
-    const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
-    if (!grupos[esp]) grupos[esp] = [];
-    grupos[esp].push(emp);
-  });
-
-  // Intercala: toma uno de cada especialidad por ronda
-  const resultado = [];
-  let quedan = true;
-  while (quedan) {
-    quedan = false;
-    Object.values(grupos).forEach(grupo => {
-      if (grupo.length > 0) {
-        resultado.push(grupo.shift());
-        quedan = true;
-      }
-    });
-  }
-  return resultado;
-}
-
 export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescartes, mapaEspecialidades = {}) {
   const MAX_POR_QUINCENA = 10;
 
@@ -77,23 +52,16 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
   const asignadosQ1 = [...soloQ1];
   const asignadosQ2 = [...soloQ2];
 
-  // Ordenar ambos por historial de descartes
   const ambosOrdenados = [...ambos].sort((a, b) => {
     const da = historialDescartes[a.empleadoId] || 0;
     const db = historialDescartes[b.empleadoId] || 0;
     return da - db;
   });
 
-  // Agrupar los "ambos" por especialidad para distribuirlos entre quincenas
-  const especialidadesVistas = {};
   for (const emp of ambosOrdenados) {
     const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
-
-    // Si esta especialidad ya tiene alguien en Q1, intentar mandar a Q2 y viceversa
     const enQ1 = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
     const enQ2 = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
-
-    // Priorizar la quincena con menos de esa especialidad, desempatando por cantidad total
     const preferirQ1 = enQ1 < enQ2 || (enQ1 === enQ2 && asignadosQ1.length <= asignadosQ2.length);
     if (preferirQ1) {
       asignadosQ1.push({ ...emp, preferencia: "q1" });
@@ -102,7 +70,6 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
     }
   }
 
-  // Aplicar máximo y descarte justo
   const aplicarMaximo = (lista, historial) => {
     if (lista.length <= MAX_POR_QUINCENA) return { seleccionados: lista, descartados: [] };
     const sorted = [...lista].sort((a, b) => {
@@ -125,7 +92,8 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
   };
 }
 
-export function distribuir(seleccionados, anio, mes, quincena) {
+// historialAsignaciones = { uid: totalDiasHistoricos }
+export function distribuir(seleccionados, anio, mes, quincena, historialAsignaciones = {}) {
   const dias = getDiasQuincena(anio, mes, quincena);
   const asignaciones = {};
   seleccionados.forEach(e => { asignaciones[e.empleadoId] = []; });
@@ -139,12 +107,20 @@ export function distribuir(seleccionados, anio, mes, quincena) {
     const req = getRequerimiento(turno);
     diasTurno.forEach(dia => {
       const ordenados = [...seleccionados].sort((a, b) => {
+        // 1er criterio: menos días asignados en esta quincena
         const totalA = asignaciones[a.empleadoId].length;
         const totalB = asignaciones[b.empleadoId].length;
         if (totalA !== totalB) return totalA - totalB;
+
+        // 2do criterio: menos días de este turno en esta quincena
         const turnoA = asignaciones[a.empleadoId].filter(x => x.turno === turno).length;
         const turnoB = asignaciones[b.empleadoId].filter(x => x.turno === turno).length;
-        return turnoA - turnoB;
+        if (turnoA !== turnoB) return turnoA - turnoB;
+
+        // 3er criterio (nuevo): menos días acumulados históricamente
+        const histA = historialAsignaciones[a.empleadoId] || 0;
+        const histB = historialAsignaciones[b.empleadoId] || 0;
+        return histA - histB;
       });
       ordenados.slice(0, req).forEach(e => {
         asignaciones[e.empleadoId].push({

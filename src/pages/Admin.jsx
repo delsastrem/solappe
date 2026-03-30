@@ -297,25 +297,36 @@ export default function Admin() {
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
 
-      const snapAsig = await getDocs(collection(db, "asignaciones"));
-      const borrar = snapAsig.docs.filter(d => {
+      // Calcular historial de días asignados por persona (EXCLUYENDO el mes que vamos a generar)
+      const snapAsigTodas = await getDocs(collection(db, "asignaciones"));
+      const historialAsignaciones = {};
+      snapAsigTodas.docs.forEach(d => {
+        const data = d.data();
+        // Solo contar meses anteriores, no el que vamos a generar ahora
+        if (data.mes === mesProximo && data.anio === anioProximo) return;
+        if (!historialAsignaciones[data.empleadoId]) historialAsignaciones[data.empleadoId] = 0;
+        historialAsignaciones[data.empleadoId] += data.dias.length;
+      });
+
+      // Borrar distribución anterior del mes próximo
+      const borrar = snapAsigTodas.docs.filter(d => {
         const data = d.data();
         return data.mes === mesProximo && data.anio === anioProximo;
       });
       for (const d of borrar) await deleteDoc(doc(db, "asignaciones", d.id));
 
-      // Pasar mapaEspecialidades al algoritmo
       const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial, mapaEspecialidades);
       const inscKey = `${anioProximo}-${mesProximo}`;
 
-      const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1);
+      // Pasar historialAsignaciones a distribuir
+      const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1, historialAsignaciones);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ1)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q1`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 1, dias,
         });
       }
 
-      const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2);
+      const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2, historialAsignaciones);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ2)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q2`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 2, dias,
