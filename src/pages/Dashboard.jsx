@@ -19,10 +19,12 @@ export default function Dashboard() {
   const [loadingPass, setLoadingPass] = useState(false);
   const [mobile, setMobile] = useState(window.innerWidth < 640);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
+  const [solicitudesEnviadas, setSolicitudesEnviadas] = useState([]);
   const [historialPropio, setHistorialPropio] = useState([]);
   const [empleados, setEmpleados] = useState({});
   const [procesando, setProcesando] = useState(null);
   const [ratioPropio, setRatioPropio] = useState(null);
+  const [misAsignaciones, setMisAsignaciones] = useState([]);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -45,11 +47,12 @@ export default function Dashboard() {
     cargarSolicitudes();
     cargarRatioPropio();
     cargarHistorialPropio();
+    cargarMisAsignaciones();
   }, []);
 
   useEffect(() => {
     if (seccion === "cuenta") cargarRatioPropio();
-    if (seccion === "cambios") cargarHistorialPropio();
+    if (seccion === "cambios") { cargarSolicitudes(); cargarHistorialPropio(); }
   }, [seccion]);
 
   const cargarDatos = async () => {
@@ -70,13 +73,21 @@ export default function Dashboard() {
     setEmpleados(mapa);
   };
 
+  const cargarMisAsignaciones = async () => {
+    if (!user) return;
+    const snap = await getDocs(collection(db, "asignaciones"));
+    const lista = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(a => a.empleadoId === user.uid);
+    setMisAsignaciones(lista);
+  };
+
   const cargarSolicitudes = async () => {
     if (!user) return;
     const snap = await getDocs(collection(db, "solicitudesCambio"));
-    const lista = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(s => s.receptorId === user.uid && s.estado === "pendiente");
-    setSolicitudesPendientes(lista);
+    const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    setSolicitudesPendientes(todas.filter(s => s.receptorId === user.uid && s.estado === "pendiente"));
+    setSolicitudesEnviadas(todas.filter(s => s.solicitanteId === user.uid && s.estado === "pendiente"));
   };
 
   const cargarHistorialPropio = async () => {
@@ -205,6 +216,73 @@ export default function Dashboard() {
     setLoadingPass(false);
   };
 
+  // Generar archivo .ics con los días asignados del usuario
+  const exportarICS = (soloMes = null) => {
+    let dias = [];
+    misAsignaciones.forEach(asig => {
+      asig.dias.forEach(d => {
+        if (soloMes && asig.mes !== soloMes) return;
+        dias.push({ fecha: d.fecha, turno: d.turno, label: d.label });
+      });
+    });
+
+    if (dias.length === 0) {
+      alert("No tenés días asignados para exportar.");
+      return;
+    }
+
+    const turnoHoras = {
+      mañana: { inicio: "070000", fin: "150000" },
+      tarde:  { inicio: "150000", fin: "230000" },
+      noche:  { inicio: "230000", fin: "070000" },
+    };
+
+    const formatFecha = (isoStr, horaStr) => {
+      const f = new Date(isoStr);
+      const y = f.getFullYear();
+      const m = String(f.getMonth() + 1).padStart(2, "0");
+      const d = String(f.getDate()).padStart(2, "0");
+      return `${y}${m}${d}T${horaStr}`;
+    };
+
+    const formatFechaSiguiente = (isoStr, horaStr) => {
+      const f = new Date(isoStr);
+      f.setDate(f.getDate() + 1);
+      const y = f.getFullYear();
+      const m = String(f.getMonth() + 1).padStart(2, "0");
+      const d = String(f.getDate()).padStart(2, "0");
+      return `${y}${m}${d}T${horaStr}`;
+    };
+
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//solAPPe//ES\r\nCALSCALE:GREGORIAN\r\n";
+
+    dias.forEach((d, i) => {
+      const horas = turnoHoras[d.turno] || { inicio: "080000", fin: "160000" };
+      const esNoche = d.turno === "noche";
+      const dtStart = formatFecha(d.fecha, horas.inicio);
+      const dtEnd = esNoche
+        ? formatFechaSiguiente(d.fecha, horas.fin)
+        : formatFecha(d.fecha, horas.fin);
+      const turnoLabel = d.turno === "mañana" ? "☀️ Mañana" : d.turno === "tarde" ? "🌅 Tarde" : "🌙 Noche";
+
+      ics += `BEGIN:VEVENT\r\n`;
+      ics += `UID:solappe-${user.uid}-${i}@solappe\r\n`;
+      ics += `DTSTART;TZID=America/Argentina/Buenos_Aires:${dtStart}\r\n`;
+      ics += `DTEND;TZID=America/Argentina/Buenos_Aires:${dtEnd}\r\n`;
+      ics += `SUMMARY:Solape — ${turnoLabel}\r\n`;
+      ics += `DESCRIPTION:Turno de solape generado por solAPPe\r\n`;
+      ics += `END:VEVENT\r\n`;
+    });
+
+    ics += "END:VCALENDAR";
+
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `solape-mis-dias.ics`;
+    link.click();
+  };
+
   const labelPreferencia = (p) => {
     if (p === "q1") return "Primera quincena (1-15)";
     if (p === "q2") return "Segunda quincena (16-fin)";
@@ -213,11 +291,12 @@ export default function Dashboard() {
   };
 
   const labelTab = (s) => {
+    const pendientes = solicitudesPendientes.length;
+    const enviadas = solicitudesEnviadas.length;
+    const total = pendientes + enviadas;
     if (s === "inscripcion") return `📋 ${mobile ? "Inscripción" : `Inscripción — ${nombreMes}`}`;
     if (s === "calendario") return "📅 Calendario";
-    if (s === "cambios") return solicitudesPendientes.length > 0
-      ? `🔄 Cambios (${solicitudesPendientes.length})`
-      : "🔄 Cambios";
+    if (s === "cambios") return total > 0 ? `🔄 Cambios (${total})` : "🔄 Cambios";
     return "🔑 Mi cuenta";
   };
 
@@ -259,9 +338,13 @@ export default function Dashboard() {
 
   return (
     <div style={styles.container}>
-      {solicitudesPendientes.length > 0 && seccion !== "cambios" && (
+      {(solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0) && seccion !== "cambios" && (
         <div style={styles.banner} onClick={() => setSeccion("cambios")}>
-          🔔 Tenés {solicitudesPendientes.length} solicitud{solicitudesPendientes.length > 1 ? "es" : ""} de cambio pendiente{solicitudesPendientes.length > 1 ? "s" : ""}. Tocá para ver.
+          🔔{" "}
+          {solicitudesPendientes.length > 0 && `Tenés ${solicitudesPendientes.length} solicitud${solicitudesPendientes.length > 1 ? "es" : ""} pendiente${solicitudesPendientes.length > 1 ? "s" : ""}`}
+          {solicitudesPendientes.length > 0 && solicitudesEnviadas.length > 0 && " · "}
+          {solicitudesEnviadas.length > 0 && `${solicitudesEnviadas.length} solicitud${solicitudesEnviadas.length > 1 ? "es" : ""} enviada${solicitudesEnviadas.length > 1 ? "s" : ""} en espera`}
+          {". Tocá para ver."}
         </div>
       )}
 
@@ -284,7 +367,7 @@ export default function Dashboard() {
             style={{
               ...styles.tab,
               ...(seccion === s ? styles.tabActivo : {}),
-              ...(s === "cambios" && solicitudesPendientes.length > 0 ? styles.tabAlerta : {}),
+              ...((s === "cambios" && (solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0)) ? styles.tabAlerta : {}),
             }}
             onClick={() => setSeccion(s)}
           >
@@ -347,14 +430,58 @@ export default function Dashboard() {
 
         {seccion === "calendario" && (
           <div style={styles.card}>
-            <Calendario />
+            <Calendario solicitudesEnviadas={solicitudesEnviadas} solicitudesPendientes={solicitudesPendientes} />
+            <div style={{ marginTop: 12, display: "flex", justifyContent: "center" }}>
+              <button
+                style={{ ...styles.boton, background: "#3f51b5", width: "auto", padding: "10px 20px", fontSize: 14 }}
+                onClick={() => exportarICS()}
+              >
+                📅 Exportar mis días a Google Calendar
+              </button>
+            </div>
           </div>
         )}
 
         {seccion === "cambios" && (
           <>
+            {/* Solicitudes enviadas en espera */}
+            {solicitudesEnviadas.length > 0 && (
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>⏳ Solicitudes enviadas en espera</h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {solicitudesEnviadas.map(s => {
+                    const receptor = empleados[s.receptorId];
+                    return (
+                      <div key={s.id} style={{
+                        ...styles.solicitudCard,
+                        borderLeft: "4px solid #f39c12",
+                        background: "#fffbf0",
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, color: "#1a1a2e" }}>
+                            Esperando respuesta de{" "}
+                            <strong>{receptor ? `${receptor.apellido}, ${receptor.nombre}` : "..."}</strong>
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 6, background: "#fef3cd", color: "#856404" }}>
+                            ⏳ Pendiente
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#666" }}>
+                          {s.labelOrigen} ({s.turnoOrigen}) ⇄ {s.labelDestino} ({s.turnoDestino})
+                        </div>
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+                          Enviada el {new Date(s.creadoEn).toLocaleDateString("es-AR")}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Solicitudes recibidas pendientes */}
             <div style={styles.card}>
-              <h2 style={styles.cardTitle}>🔄 Solicitudes pendientes</h2>
+              <h2 style={styles.cardTitle}>🔄 Solicitudes recibidas</h2>
               {solicitudesPendientes.length === 0 ? (
                 <div style={styles.aviso}>No tenés solicitudes de cambio pendientes.</div>
               ) : (
@@ -395,6 +522,7 @@ export default function Dashboard() {
               )}
             </div>
 
+            {/* Historial */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>📋 Mis últimos cambios</h2>
               {historialPropio.length === 0 ? (

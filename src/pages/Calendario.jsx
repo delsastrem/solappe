@@ -13,7 +13,7 @@ const COLORES_TURNO = {
 
 const isMobile = () => window.innerWidth < 640;
 
-export default function Calendario({ esAdmin }) {
+export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitudesPendientes = [] }) {
   const [asignaciones, setAsignaciones] = useState([]);
   const [empleados, setEmpleados] = useState({});
   const [asistencias, setAsistencias] = useState({});
@@ -91,6 +91,15 @@ export default function Calendario({ esAdmin }) {
     return Object.entries(asistencias)
       .filter(([k, v]) => k.startsWith(prefix) && v.esReemplazante === true)
       .map(([, v]) => v);
+  };
+
+  const tieneSolicitudPendiente = (dia, empleadoId) => {
+    const todasPendientes = [...solicitudesEnviadas, ...solicitudesPendientes];
+    return todasPendientes.some(s =>
+      (s.solicitanteId === empleadoId || s.receptorId === empleadoId) &&
+      ((s.diaOrigen === dia && s.mesOrigen === mes && s.anioOrigen === anio) ||
+       (s.diaDestino === dia && s.mesDestino === mes && s.anioDestino === anio))
+    );
   };
 
   const mapaDias = {};
@@ -238,6 +247,7 @@ export default function Calendario({ esAdmin }) {
     const emp = empleados[a.empleadoId];
     const esMio = user && a.empleadoId === user.uid && !esAdmin;
     const confirmado = estaConfirmado(dia, a.empleadoId);
+    const pendiente = tieneSolicitudPendiente(dia, a.empleadoId);
     const nombre = esLista
       ? (emp ? `${emp.apellido}, ${emp.nombre}` : "...")
       : (emp ? emp.apellido.substring(0, 8) : "...");
@@ -256,11 +266,17 @@ export default function Calendario({ esAdmin }) {
           ...(esLista ? { fontSize: 13 } : {}),
           ...(esMio ? styles.chipMio : {}),
           ...(confirmado ? styles.chipConfirmado : {}),
+          ...(pendiente ? styles.chipPendiente : {}),
           cursor: esMio ? "pointer" : "default",
         }}
-        title={esMio ? "Clic para solicitar cambio" : confirmado ? "✓ Confirmado" : ""}
+        title={
+          pendiente ? "⚠️ Cambio pendiente"
+          : esMio ? "Clic para solicitar cambio"
+          : confirmado ? "✓ Confirmado"
+          : ""
+        }
       >
-        {confirmado ? "✓ " : ""}{nombre}{esMio && !confirmado ? " 🔄" : ""}
+        {confirmado ? "✓ " : ""}{pendiente ? "⚠️ " : ""}{nombre}{esMio && !confirmado && !pendiente ? " 🔄" : ""}
       </span>
     );
   };
@@ -504,6 +520,9 @@ export default function Calendario({ esAdmin }) {
           <div style={{ width: 10, height: 10, borderRadius: 3, background: "#3f51b5" }} />
           <span style={{ fontSize: 12, color: "#555" }}>🔄 Reemplazante</span>
         </div>
+        <div style={styles.leyendaItem}>
+          <span style={{ fontSize: 12, color: "#856404" }}>⚠️ Cambio pendiente</span>
+        </div>
       </div>
 
       <div ref={calendarioRef}>
@@ -564,6 +583,10 @@ const styles = {
   chipConfirmado: {
     background: "#d4edda", color: "#1e8449", fontWeight: 600,
     border: "1px solid #27ae60",
+  },
+  chipPendiente: {
+    background: "#fef3cd", color: "#856404", fontWeight: 600,
+    border: "1px solid #f39c12",
   },
   chipReemplazante: {
     background: "#cce5ff", color: "#004085", fontWeight: 600,
