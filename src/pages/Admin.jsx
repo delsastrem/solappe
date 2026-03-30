@@ -8,12 +8,15 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
 
+const ESPECIALIDADES = ["MONTAJE", "AVIONICA", "MOTORES", "RADIO", "SCO"];
+
 export default function Admin() {
   const [empleados, setEmpleados] = useState([]);
   const [nombre, setNombre] = useState("");
   const [apellido, setApellido] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [especialidadNuevo, setEspecialidadNuevo] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
   const [inscripcionAbierta, setInscripcionAbierta] = useState(false);
@@ -43,6 +46,7 @@ export default function Admin() {
   const [diaSeleccionado, setDiaSeleccionado] = useState(null);
   const [ratios, setRatios] = useState({});
   const [ratioPropio, setRatioPropio] = useState(null);
+  const [editandoEsp, setEditandoEsp] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -236,6 +240,12 @@ export default function Admin() {
     setAsistencias(prev => { const n = { ...prev }; delete n[docId]; return n; });
   };
 
+  const guardarEspecialidad = async (empId, especialidad) => {
+    await setDoc(doc(db, "empleados", empId), { especialidad }, { merge: true });
+    setEmpleados(prev => prev.map(e => e.id === empId ? { ...e, especialidad } : e));
+    setEditandoEsp(null);
+  };
+
   const responderSolicitud = async (solicitud, aceptar) => {
     setProcesando(solicitud.id);
     try {
@@ -276,31 +286,42 @@ export default function Admin() {
     try {
       const snapEmps = await getDocs(collection(db, "empleados"));
       const historial = {};
-      snapEmps.docs.forEach(d => { historial[d.id] = d.data().historialDescartes || 0; });
+      const mapaEspecialidades = {};
+      snapEmps.docs.forEach(d => {
+        historial[d.id] = d.data().historialDescartes || 0;
+        if (d.data().especialidad) mapaEspecialidades[d.id] = d.data().especialidad;
+      });
+
       const snapInsc = await getDocs(collection(db, "inscripciones"));
       const inscriptos = snapInsc.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
+
       const snapAsig = await getDocs(collection(db, "asignaciones"));
       const borrar = snapAsig.docs.filter(d => {
         const data = d.data();
         return data.mes === mesProximo && data.anio === anioProximo;
       });
       for (const d of borrar) await deleteDoc(doc(db, "asignaciones", d.id));
-      const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial);
+
+      // Pasar mapaEspecialidades al algoritmo
+      const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial, mapaEspecialidades);
       const inscKey = `${anioProximo}-${mesProximo}`;
+
       const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ1)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q1`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 1, dias,
         });
       }
+
       const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ2)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q2`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 2, dias,
         });
       }
+
       for (const desc of [...q1.descartados, ...q2.descartados]) {
         const actual = historial[desc.empleadoId] || 0;
         await setDoc(doc(db, "empleados", desc.empleadoId), { historialDescartes: actual + 1 }, { merge: true });
@@ -330,9 +351,10 @@ export default function Admin() {
       await setDoc(doc(db, "empleados", cred.user.uid), {
         nombre, apellido, email, esAdmin: false,
         historialDescartes: 0, creadoEn: new Date().toISOString(),
+        especialidad: especialidadNuevo || "",
       });
       setMensaje(`✓ Empleado ${apellido}, ${nombre} creado correctamente`);
-      setNombre(""); setApellido(""); setEmail(""); setPassword("");
+      setNombre(""); setApellido(""); setEmail(""); setPassword(""); setEspecialidadNuevo("");
       cargarEmpleados();
     } catch (err) {
       if (err.code === "auth/email-already-in-use") {
@@ -435,6 +457,14 @@ export default function Admin() {
     noche:  { bg: "#e8eaf6", text: "#283593" },
   };
 
+  const COLORES_ESP = {
+    MONTAJE:  { bg: "#fce4ec", text: "#880e4f" },
+    AVIONICA: { bg: "#e8eaf6", text: "#283593" },
+    MOTORES:  { bg: "#fff3e0", text: "#e65100" },
+    RADIO:    { bg: "#e0f2f1", text: "#004d40" },
+    SCO:      { bg: "#f3e5f5", text: "#4a148c" },
+  };
+
   const renderColumnaResumen = (lista, titulo) => (
     <div style={styles.resumenCol}>
       <div style={styles.resumenHeader}>
@@ -535,7 +565,60 @@ export default function Admin() {
     );
   };
 
-  // Historial: mostrar los primeros 5, expandir para ver hasta 10
+  const renderEspecialidad = (e) => {
+    const esp = e.especialidad;
+    const color = esp ? (COLORES_ESP[esp] || { bg: "#f0f2f5", text: "#666" }) : null;
+
+    if (editandoEsp === e.id) {
+      return (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+          {ESPECIALIDADES.map(op => (
+            <button
+              key={op}
+              style={{
+                padding: "3px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer",
+                background: op === esp ? "#1a1a2e" : (COLORES_ESP[op]?.bg || "#f0f2f5"),
+                color: op === esp ? "white" : (COLORES_ESP[op]?.text || "#666"),
+                border: `1px solid ${op === esp ? "#1a1a2e" : "#ddd"}`,
+                fontWeight: op === esp ? 700 : 400,
+              }}
+              onClick={() => guardarEspecialidad(e.id, op)}
+            >
+              {op}
+            </button>
+          ))}
+          <button
+            style={{ padding: "3px 8px", borderRadius: 6, fontSize: 11, background: "white", border: "1px solid #ddd", color: "#999", cursor: "pointer" }}
+            onClick={() => setEditandoEsp(null)}
+          >
+            ✕
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+        {esp ? (
+          <span style={{
+            fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
+            background: color.bg, color: color.text,
+          }}>
+            {esp}
+          </span>
+        ) : (
+          <span style={{ fontSize: 11, color: "#bbb" }}>Sin especialidad</span>
+        )}
+        <button
+          style={{ fontSize: 11, color: "#3f51b5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
+          onClick={() => setEditandoEsp(e.id)}
+        >
+          {esp ? "Cambiar" : "Asignar"}
+        </button>
+      </div>
+    );
+  };
+
   const historialVisible = historialExpandido
     ? historialCambios.slice(0, 10)
     : historialCambios.slice(0, 5);
@@ -582,6 +665,10 @@ export default function Admin() {
                 <input style={styles.input} placeholder="Apellido" value={apellido} onChange={e => setApellido(e.target.value)} />
                 <input style={styles.input} placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
                 <input style={styles.input} placeholder="Contraseña inicial" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+                <select style={styles.input} value={especialidadNuevo} onChange={e => setEspecialidadNuevo(e.target.value)}>
+                  <option value="">Especialidad (opcional)</option>
+                  {ESPECIALIDADES.map(op => <option key={op} value={op}>{op}</option>)}
+                </select>
               </div>
               {mensaje && <p style={styles.mensajeOk}>{mensaje}</p>}
               <button style={{ ...styles.boton, width: mobile ? "100%" : "auto" }} onClick={agregarEmpleado} disabled={loading}>
@@ -606,6 +693,7 @@ export default function Admin() {
                       {renderRatio(e.id)}
                     </div>
                     <div style={styles.empleadoEmail}>{e.email}</div>
+                    {renderEspecialidad(e)}
                   </div>
                   <div style={styles.rowBotones}>
                     <button style={styles.botonSecundario} onClick={() => hacerAdmin(e.id, e.esAdmin)}>
@@ -755,6 +843,8 @@ export default function Admin() {
                       const docId = `${diaActual.key}_${a.empleadoId}`;
                       const confirmado = asistencias[docId]?.confirmado;
                       const color = COLORES_TURNO[a.turno] || { bg: "#f5f5f5", text: "#333" };
+                      const esp = emp?.especialidad;
+                      const colorEsp = esp ? (COLORES_ESP[esp] || { bg: "#f0f2f5", text: "#666" }) : null;
                       return (
                         <div key={i} style={{
                           ...styles.asistenciaFila,
@@ -764,8 +854,13 @@ export default function Admin() {
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                             <span style={{ fontSize: 20 }}>{confirmado ? "✅" : "⬜"}</span>
                             <div>
-                              <div style={{ fontWeight: 600, fontSize: 14, color: "#1a1a2e" }}>
+                              <div style={{ fontWeight: 600, fontSize: 14, color: "#1a1a2e", display: "flex", alignItems: "center", gap: 6 }}>
                                 {emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId}
+                                {esp && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: colorEsp.bg, color: colorEsp.text }}>
+                                    {esp}
+                                  </span>
+                                )}
                               </div>
                               <span style={{ ...styles.resumenChip, background: color.bg, color: color.text, fontSize: 11 }}>
                                 {a.turno} {a.turno === "mañana" ? "☀️" : a.turno === "tarde" ? "🌅" : "🌙"}
@@ -865,14 +960,8 @@ export default function Admin() {
                     {historialVisible.map(s => renderSolicitudCard(s, false))}
                   </div>
                   {historialCambios.length > 5 && (
-                    <button
-                      style={{ ...styles.botonVerMas }}
-                      onClick={() => setHistorialExpandido(!historialExpandido)}
-                    >
-                      {historialExpandido
-                        ? "▲ Ver menos"
-                        : `▼ Ver más (${Math.min(historialCambios.length - 5, 5)} más)`
-                      }
+                    <button style={styles.botonVerMas} onClick={() => setHistorialExpandido(!historialExpandido)}>
+                      {historialExpandido ? "▲ Ver menos" : `▼ Ver más (${Math.min(historialCambios.length - 5, 5)} más)`}
                     </button>
                   )}
                 </>
@@ -889,7 +978,6 @@ export default function Admin() {
                 <strong>{empleadoActual.apellido}, {empleadoActual.nombre}</strong>
               </p>
             )}
-
             {ratioPropio && (
               <div style={styles.ratioBox}>
                 <span style={styles.ratioTitulo}>📊 Mis asistencias</span>
@@ -904,7 +992,6 @@ export default function Admin() {
                 </span>
               </div>
             )}
-
             <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1a1a2e", margin: "20px 0 12px" }}>
               Cambiar contraseña
             </h3>

@@ -16,7 +16,7 @@ const CICLO = [
   { turno: "franco" },
 ];
 
-const INICIO_CICLO = new Date(2026, 3, 1); // 1ro de abril 2026
+const INICIO_CICLO = new Date(2026, 3, 1);
 
 export function getTurnoParaDia(fecha) {
   const diff = Math.floor((fecha - INICIO_CICLO) / (1000 * 60 * 60 * 24));
@@ -42,35 +42,67 @@ export function getRequerimiento(turno) {
   return turno === "tarde" ? 3 : 4;
 }
 
-// Función principal que balancea AMBAS quincenas juntas antes de distribuir
-export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescartes) {
+// Intenta maximizar la diversidad de especialidades en cada quincena
+function balancearPorEspecialidad(lista, mapaEspecialidades) {
+  // Agrupa por especialidad
+  const grupos = {};
+  lista.forEach(emp => {
+    const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
+    if (!grupos[esp]) grupos[esp] = [];
+    grupos[esp].push(emp);
+  });
+
+  // Intercala: toma uno de cada especialidad por ronda
+  const resultado = [];
+  let quedan = true;
+  while (quedan) {
+    quedan = false;
+    Object.values(grupos).forEach(grupo => {
+      if (grupo.length > 0) {
+        resultado.push(grupo.shift());
+        quedan = true;
+      }
+    });
+  }
+  return resultado;
+}
+
+export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescartes, mapaEspecialidades = {}) {
   const MAX_POR_QUINCENA = 10;
 
   const soloQ1 = inscriptos.filter(e => e.preferencia === "q1");
   const soloQ2 = inscriptos.filter(e => e.preferencia === "q2");
   const ambos  = inscriptos.filter(e => e.preferencia === "ambas");
 
-  // Balancear: asignar los "ambos" para equilibrar las quincenas
   const asignadosQ1 = [...soloQ1];
   const asignadosQ2 = [...soloQ2];
 
-  // Ordenar ambos por historial de descartes (menos descartes = más prioridad)
+  // Ordenar ambos por historial de descartes
   const ambosOrdenados = [...ambos].sort((a, b) => {
     const da = historialDescartes[a.empleadoId] || 0;
     const db = historialDescartes[b.empleadoId] || 0;
     return da - db;
   });
 
-  // Ir asignando uno a uno al que tenga menos gente
+  // Agrupar los "ambos" por especialidad para distribuirlos entre quincenas
+  const especialidadesVistas = {};
   for (const emp of ambosOrdenados) {
-    if (asignadosQ1.length <= asignadosQ2.length) {
+    const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
+
+    // Si esta especialidad ya tiene alguien en Q1, intentar mandar a Q2 y viceversa
+    const enQ1 = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+    const enQ2 = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+
+    // Priorizar la quincena con menos de esa especialidad, desempatando por cantidad total
+    const preferirQ1 = enQ1 < enQ2 || (enQ1 === enQ2 && asignadosQ1.length <= asignadosQ2.length);
+    if (preferirQ1) {
       asignadosQ1.push({ ...emp, preferencia: "q1" });
     } else {
       asignadosQ2.push({ ...emp, preferencia: "q2" });
     }
   }
 
-  // Aplicar máximo y descarte justo para cada quincena
+  // Aplicar máximo y descarte justo
   const aplicarMaximo = (lista, historial) => {
     if (lista.length <= MAX_POR_QUINCENA) return { seleccionados: lista, descartados: [] };
     const sorted = [...lista].sort((a, b) => {
