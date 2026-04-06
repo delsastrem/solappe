@@ -25,6 +25,8 @@ export default function Dashboard() {
   const [procesando, setProcesando] = useState(null);
   const [ratioPropio, setRatioPropio] = useState(null);
   const [misAsignaciones, setMisAsignaciones] = useState([]);
+  const [resumenMeses, setResumenMeses] = useState([]);
+  const [mesResumenSeleccionado, setMesResumenSeleccionado] = useState(null);
 
   const user = auth.currentUser;
   const ahora = new Date();
@@ -53,6 +55,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (seccion === "cuenta") cargarRatioPropio();
     if (seccion === "cambios") { cargarSolicitudes(); cargarHistorialPropio(); }
+    if (seccion === "resumen") cargarResumen();
   }, [seccion]);
 
   const cargarDatos = async () => {
@@ -119,6 +122,53 @@ export default function Dashboard() {
       if (data.empleadoId === user.uid && data.confirmado) confirmados++;
     });
     setRatioPropio({ asignados, confirmados });
+  };
+
+  const cargarResumen = async () => {
+    const snapAsig = await getDocs(collection(db, "asignaciones"));
+    const mapaEmp = { ...empleados };
+
+    // Agrupar por mes/año
+    const porMes = {};
+    snapAsig.docs.forEach(d => {
+      const data = d.data();
+      const key = `${data.anio}-${data.mes}`;
+      if (!porMes[key]) porMes[key] = { anio: data.anio, mes: data.mes, docs: [] };
+      porMes[key].docs.push(data);
+    });
+
+    const meses = Object.values(porMes).sort((a, b) => {
+      if (a.anio !== b.anio) return b.anio - a.anio;
+      return b.mes - a.mes;
+    });
+
+    const resultado = meses.map(({ anio: a, mes: m, docs }) => {
+      const label = new Date(a, m - 1, 1)
+        .toLocaleString("es-AR", { month: "long", year: "numeric" });
+      const esFuturo = a > anio || (a === anio && m > mes);
+
+      const mapear = (quincena) =>
+        docs
+          .filter(d => d.quincena === quincena)
+          .map(d => {
+            const emp = mapaEmp[d.empleadoId];
+            const esMio = d.empleadoId === user.uid;
+            return {
+              nombre: emp ? `${emp.apellido}, ${emp.nombre}` : d.empleadoId,
+              dias: d.dias.length,
+              detalle: d.dias,
+              esMio,
+            };
+          })
+          .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+      return { key: `${a}-${m}`, label, anio: a, mes: m, esFuturo, q1: mapear(1), q2: mapear(2) };
+    });
+
+    setResumenMeses(resultado);
+    if (resultado.length > 0 && !mesResumenSeleccionado) {
+      setMesResumenSeleccionado(resultado[0].key);
+    }
   };
 
   const responderSolicitud = async (solicitud, aceptar) => {
@@ -216,7 +266,6 @@ export default function Dashboard() {
     setLoadingPass(false);
   };
 
-  // Generar archivo .ics con los días asignados del usuario
   const exportarICS = (soloMes = null) => {
     let dias = [];
     misAsignaciones.forEach(asig => {
@@ -225,57 +274,31 @@ export default function Dashboard() {
         dias.push({ fecha: d.fecha, turno: d.turno, label: d.label });
       });
     });
-
-    if (dias.length === 0) {
-      alert("No tenés días asignados para exportar.");
-      return;
-    }
-
+    if (dias.length === 0) { alert("No tenés días asignados para exportar."); return; }
     const turnoHoras = {
       mañana: { inicio: "070000", fin: "150000" },
       tarde:  { inicio: "150000", fin: "230000" },
       noche:  { inicio: "230000", fin: "070000" },
     };
-
     const formatFecha = (isoStr, horaStr) => {
       const f = new Date(isoStr);
-      const y = f.getFullYear();
-      const m = String(f.getMonth() + 1).padStart(2, "0");
-      const d = String(f.getDate()).padStart(2, "0");
-      return `${y}${m}${d}T${horaStr}`;
+      return `${f.getFullYear()}${String(f.getMonth()+1).padStart(2,"0")}${String(f.getDate()).padStart(2,"0")}T${horaStr}`;
     };
-
     const formatFechaSiguiente = (isoStr, horaStr) => {
       const f = new Date(isoStr);
       f.setDate(f.getDate() + 1);
-      const y = f.getFullYear();
-      const m = String(f.getMonth() + 1).padStart(2, "0");
-      const d = String(f.getDate()).padStart(2, "0");
-      return `${y}${m}${d}T${horaStr}`;
+      return `${f.getFullYear()}${String(f.getMonth()+1).padStart(2,"0")}${String(f.getDate()).padStart(2,"0")}T${horaStr}`;
     };
-
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//solAPPe//ES\r\nCALSCALE:GREGORIAN\r\n";
-
     dias.forEach((d, i) => {
       const horas = turnoHoras[d.turno] || { inicio: "080000", fin: "160000" };
       const esNoche = d.turno === "noche";
       const dtStart = formatFecha(d.fecha, horas.inicio);
-      const dtEnd = esNoche
-        ? formatFechaSiguiente(d.fecha, horas.fin)
-        : formatFecha(d.fecha, horas.fin);
+      const dtEnd = esNoche ? formatFechaSiguiente(d.fecha, horas.fin) : formatFecha(d.fecha, horas.fin);
       const turnoLabel = d.turno === "mañana" ? "☀️ Mañana" : d.turno === "tarde" ? "🌅 Tarde" : "🌙 Noche";
-
-      ics += `BEGIN:VEVENT\r\n`;
-      ics += `UID:solappe-${user.uid}-${i}@solappe\r\n`;
-      ics += `DTSTART;TZID=America/Argentina/Buenos_Aires:${dtStart}\r\n`;
-      ics += `DTEND;TZID=America/Argentina/Buenos_Aires:${dtEnd}\r\n`;
-      ics += `SUMMARY:Solape — ${turnoLabel}\r\n`;
-      ics += `DESCRIPTION:Turno de solape generado por solAPPe\r\n`;
-      ics += `END:VEVENT\r\n`;
+      ics += `BEGIN:VEVENT\r\nUID:solappe-${user.uid}-${i}@solappe\r\nDTSTART;TZID=America/Argentina/Buenos_Aires:${dtStart}\r\nDTEND;TZID=America/Argentina/Buenos_Aires:${dtEnd}\r\nSUMMARY:Solape — ${turnoLabel}\r\nDESCRIPTION:Turno de solape generado por solAPPe\r\nEND:VEVENT\r\n`;
     });
-
     ics += "END:VCALENDAR";
-
     const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -291,14 +314,59 @@ export default function Dashboard() {
   };
 
   const labelTab = (s) => {
-    const pendientes = solicitudesPendientes.length;
-    const enviadas = solicitudesEnviadas.length;
-    const total = pendientes + enviadas;
+    const total = solicitudesPendientes.length + solicitudesEnviadas.length;
     if (s === "inscripcion") return `📋 ${mobile ? "Inscripción" : `Inscripción — ${nombreMes}`}`;
     if (s === "calendario") return "📅 Calendario";
+    if (s === "resumen") return "📊 Resumen";
     if (s === "cambios") return total > 0 ? `🔄 Cambios (${total})` : "🔄 Cambios";
     return "🔑 Mi cuenta";
   };
+
+  const COLORES_TURNO = {
+    mañana: { bg: "#fff8e1", text: "#856404" },
+    tarde:  { bg: "#e8f5e9", text: "#1e8449" },
+    noche:  { bg: "#e8eaf6", text: "#283593" },
+  };
+
+  const renderColumnaResumen = (lista, titulo) => (
+    <div style={styles.resumenCol}>
+      <div style={styles.resumenHeader}>
+        <h3 style={styles.resumenTitulo}>{titulo}</h3>
+        <span style={styles.resumenCount}>{lista.length} personas</span>
+      </div>
+      {lista.length === 0 ? (
+        <p style={{ color: "#999", fontSize: 13, padding: 12 }}>Sin distribución generada</p>
+      ) : (
+        lista.map((emp, i) => (
+          <div key={i} style={{
+            ...styles.resumenFila,
+            background: emp.esMio ? "#f0f4ff" : "white",
+            borderLeft: emp.esMio ? "3px solid #3f51b5" : "none",
+          }}>
+            <div style={{ ...styles.resumenNombre, color: emp.esMio ? "#283593" : "#1a1a2e" }}>
+              {emp.nombre} {emp.esMio ? "👈" : ""}
+            </div>
+            <div style={styles.resumenDias}>
+              {emp.detalle.map((d, j) => {
+                const color = COLORES_TURNO[d.turno] || { bg: "#f5f5f5", text: "#333" };
+                const yaOcurrio = new Date(d.fecha) < ahora;
+                return (
+                  <span key={j} style={{
+                    ...styles.resumenChip,
+                    background: yaOcurrio ? "#f0f2f5" : color.bg,
+                    color: yaOcurrio ? "#aaa" : color.text,
+                    textDecoration: yaOcurrio ? "line-through" : "none",
+                  }}>
+                    {d.label} {d.turno === "mañana" ? "☀️" : d.turno === "tarde" ? "🌅" : "🌙"}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
 
   const renderHistorialItem = (s) => {
     const solicitante = empleados[s.solicitanteId];
@@ -336,6 +404,8 @@ export default function Dashboard() {
     );
   };
 
+  const mesSeleccionado = resumenMeses.find(m => m.key === mesResumenSeleccionado);
+
   return (
     <div style={styles.container}>
       {(solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0) && seccion !== "cambios" && (
@@ -361,7 +431,7 @@ export default function Dashboard() {
       </div>
 
       <div style={styles.tabs}>
-        {["inscripcion", "calendario", "cambios", "cuenta"].map(s => (
+        {["inscripcion", "calendario", "resumen", "cambios", "cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -442,9 +512,62 @@ export default function Dashboard() {
           </div>
         )}
 
+        {seccion === "resumen" && (
+          <div style={styles.card}>
+            <h2 style={styles.cardTitle}>📊 Distribuciones</h2>
+            {resumenMeses.length === 0 ? (
+              <div style={styles.aviso}>No hay distribuciones generadas todavía.</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                  {resumenMeses.map(m => (
+                    <button
+                      key={m.key}
+                      style={{
+                        padding: "6px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                        background: mesResumenSeleccionado === m.key ? "#1a1a2e" : "white",
+                        color: mesResumenSeleccionado === m.key ? "white" : "#666",
+                        border: `1px solid ${mesResumenSeleccionado === m.key ? "#1a1a2e" : "#ddd"}`,
+                        fontWeight: mesResumenSeleccionado === m.key ? 700 : 400,
+                        textTransform: "capitalize",
+                      }}
+                      onClick={() => setMesResumenSeleccionado(m.key)}
+                    >
+                      {m.label}
+                      {m.esFuturo && (
+                        <span style={{ marginLeft: 4, fontSize: 10, color: mesResumenSeleccionado === m.key ? "#adf" : "#3f51b5" }}>
+                          próximo
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {mesSeleccionado && (
+                  <>
+                    <div style={{ fontSize: 12, color: "#999", marginBottom: 12, fontStyle: "italic" }}>
+                      {mesSeleccionado.esFuturo
+                        ? "Distribución generada para el próximo mes."
+                        : "Distribución original tal como fue lanzada. Los días tachados ya ocurrieron. Tu fila aparece resaltada."
+                      }
+                    </div>
+                    {mesSeleccionado.q1.length === 0 && mesSeleccionado.q2.length === 0 ? (
+                      <div style={styles.aviso}>Sin datos para este mes.</div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                        {renderColumnaResumen(mesSeleccionado.q1, "1ra Quincena (1-15)")}
+                        {renderColumnaResumen(mesSeleccionado.q2, "2da Quincena (16-fin)")}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {seccion === "cambios" && (
           <>
-            {/* Solicitudes enviadas en espera */}
             {solicitudesEnviadas.length > 0 && (
               <div style={styles.card}>
                 <h2 style={styles.cardTitle}>⏳ Solicitudes enviadas en espera</h2>
@@ -479,7 +602,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Solicitudes recibidas pendientes */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>🔄 Solicitudes recibidas</h2>
               {solicitudesPendientes.length === 0 ? (
@@ -522,7 +644,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Historial */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>📋 Mis últimos cambios</h2>
               {historialPropio.length === 0 ? (
@@ -676,4 +797,19 @@ const styles = {
   },
   ratioTitulo: { fontSize: 14, fontWeight: 600, color: "#1a1a2e" },
   ratioNumero: { fontSize: 15, fontWeight: 700 },
+  resumenCol: { border: "1px solid #eee", borderRadius: 10, overflow: "hidden" },
+  resumenHeader: {
+    background: "#f0f2f5", padding: "10px 14px",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    borderBottom: "1px solid #eee",
+  },
+  resumenTitulo: { fontSize: 14, fontWeight: 700, color: "#1a1a2e" },
+  resumenCount: {
+    background: "#1a1a2e", color: "white", fontSize: 12,
+    padding: "2px 8px", borderRadius: 12, fontWeight: 600,
+  },
+  resumenFila: { padding: "10px 14px", borderBottom: "1px solid #f5f5f5" },
+  resumenNombre: { fontWeight: 600, fontSize: 14, marginBottom: 6 },
+  resumenDias: { display: "flex", flexWrap: "wrap", gap: 4 },
+  resumenChip: { fontSize: 12, padding: "2px 8px", borderRadius: 6, fontWeight: 500 },
 };
