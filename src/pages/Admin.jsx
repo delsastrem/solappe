@@ -34,8 +34,8 @@ export default function Admin() {
   const [mensajePass, setMensajePass] = useState("");
   const [loadingPass, setLoadingPass] = useState(false);
   const [empleadoActual, setEmpleadoActual] = useState(null);
-  const [resumenQ1, setResumenQ1] = useState([]);
-  const [resumenQ2, setResumenQ2] = useState([]);
+  const [resumenMeses, setResumenMeses] = useState([]);
+  const [mesResumenSeleccionado, setMesResumenSeleccionado] = useState(null);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
   const [historialCambios, setHistorialCambios] = useState([]);
   const [historialExpandido, setHistorialExpandido] = useState(false);
@@ -167,18 +167,84 @@ export default function Admin() {
   };
 
   const cargarResumen = async () => {
-    const snap = await getDocs(collection(db, "asignaciones"));
-    const asigs = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(a => a.mes === mesProximo && a.anio === anioProximo);
+    const snapAsig = await getDocs(collection(db, "asignaciones"));
+    const snapAsis = await getDocs(collection(db, "asistencias"));
     const mapaEmp = {};
     empleados.forEach(e => { mapaEmp[e.id] = e; });
-    const mapear = (list) => list.map(a => {
-      const emp = mapaEmp[a.empleadoId];
-      return { nombre: emp ? `${emp.apellido}, ${emp.nombre}` : a.empleadoId, dias: a.dias.length, detalle: a.dias };
-    }).sort((a, b) => a.nombre.localeCompare(b.nombre));
-    setResumenQ1(mapear(asigs.filter(a => a.quincena === 1)));
-    setResumenQ2(mapear(asigs.filter(a => a.quincena === 2)));
+
+    // Construir mapa de asistencias confirmadas por empleado y día
+    const asistenciasMap = {};
+    snapAsis.docs.forEach(d => {
+      const data = d.data();
+      if (data.confirmado && !data.esReemplazante) {
+        if (!asistenciasMap[data.empleadoId]) asistenciasMap[data.empleadoId] = new Set();
+        asistenciasMap[data.empleadoId].add(data.diaKey);
+      }
+    });
+
+    // Agrupar asignaciones por mes/año
+    const porMes = {};
+    snapAsig.docs.forEach(d => {
+      const data = d.data();
+      const key = `${data.anio}-${data.mes}`;
+      if (!porMes[key]) porMes[key] = { anio: data.anio, mes: data.mes, docs: [] };
+      porMes[key].docs.push(data);
+    });
+
+    // Construir lista de meses ordenados de más reciente a más antiguo
+    const meses = Object.values(porMes).sort((a, b) => {
+      if (a.anio !== b.anio) return b.anio - a.anio;
+      return b.mes - a.mes;
+    });
+
+    const resultado = meses.map(({ anio: a, mes: m, docs }) => {
+      const nombreMesLabel = new Date(a, m - 1, 1)
+        .toLocaleString("es-AR", { month: "long", year: "numeric" });
+
+      const mapear = (quincena) => {
+        return docs
+          .filter(d => d.quincena === quincena)
+          .map(d => {
+            const emp = mapaEmp[d.empleadoId];
+            // Contar días asignados originalmente (estado original, no cambios)
+            const diasOriginales = d.dias.length;
+            // Contar cuántos de esos días fueron confirmados en asistencia
+            const confirmados = d.dias.filter(dia => {
+              const fechaDia = new Date(dia.fecha);
+              const diaNum = fechaDia.getDate();
+              const mesNum = fechaDia.getMonth() + 1;
+              const anioNum = fechaDia.getFullYear();
+              const diaKey = `${anioNum}-${mesNum}-${diaNum}`;
+              return asistenciasMap[d.empleadoId]?.has(diaKey);
+            }).length;
+            // Solo mostrar confirmados si el mes ya pasó
+            const mesYaPaso = a < anio || (a === anio && m < mes);
+            return {
+              nombre: emp ? `${emp.apellido}, ${emp.nombre}` : d.empleadoId,
+              dias: diasOriginales,
+              confirmados: mesYaPaso ? confirmados : null,
+              detalle: d.dias,
+              empleadoId: d.empleadoId,
+            };
+          })
+          .sort((a, b) => a.nombre.localeCompare(b.nombre));
+      };
+
+      return {
+        key: `${a}-${m}`,
+        label: nombreMesLabel,
+        anio: a,
+        mes: m,
+        esFuturo: a > anio || (a === anio && m > mes),
+        q1: mapear(1),
+        q2: mapear(2),
+      };
+    });
+
+    setResumenMeses(resultado);
+    if (resultado.length > 0 && !mesResumenSeleccionado) {
+      setMesResumenSeleccionado(resultado[0].key);
+    }
   };
 
   const cargarAsistencia = async () => {
@@ -291,48 +357,37 @@ export default function Admin() {
         historial[d.id] = d.data().historialDescartes || 0;
         if (d.data().especialidad) mapaEspecialidades[d.id] = d.data().especialidad;
       });
-
       const snapInsc = await getDocs(collection(db, "inscripciones"));
       const inscriptos = snapInsc.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(i => i.mes === mesProximo && i.anio === anioProximo);
-
-      // Calcular historial de días asignados por persona (EXCLUYENDO el mes que vamos a generar)
       const snapAsigTodas = await getDocs(collection(db, "asignaciones"));
       const historialAsignaciones = {};
       snapAsigTodas.docs.forEach(d => {
         const data = d.data();
-        // Solo contar meses anteriores, no el que vamos a generar ahora
         if (data.mes === mesProximo && data.anio === anioProximo) return;
         if (!historialAsignaciones[data.empleadoId]) historialAsignaciones[data.empleadoId] = 0;
         historialAsignaciones[data.empleadoId] += data.dias.length;
       });
-
-      // Borrar distribución anterior del mes próximo
       const borrar = snapAsigTodas.docs.filter(d => {
         const data = d.data();
         return data.mes === mesProximo && data.anio === anioProximo;
       });
       for (const d of borrar) await deleteDoc(doc(db, "asignaciones", d.id));
-
       const { q1, q2 } = distribuirAmbasQuincenas(inscriptos, anioProximo, mesProximo, historial, mapaEspecialidades);
       const inscKey = `${anioProximo}-${mesProximo}`;
-
-      // Pasar historialAsignaciones a distribuir
       const asignacionesQ1 = distribuir(q1.seleccionados, anioProximo, mesProximo, 1, historialAsignaciones);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ1)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q1`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 1, dias,
         });
       }
-
       const asignacionesQ2 = distribuir(q2.seleccionados, anioProximo, mesProximo, 2, historialAsignaciones);
       for (const [empleadoId, dias] of Object.entries(asignacionesQ2)) {
         await setDoc(doc(db, "asignaciones", `${empleadoId}_${inscKey}_q2`), {
           empleadoId, mes: mesProximo, anio: anioProximo, quincena: 2, dias,
         });
       }
-
       for (const desc of [...q1.descartados, ...q2.descartados]) {
         const actual = historial[desc.empleadoId] || 0;
         await setDoc(doc(db, "empleados", desc.empleadoId), { historialDescartes: actual + 1 }, { merge: true });
@@ -476,7 +531,7 @@ export default function Admin() {
     SCO:      { bg: "#f3e5f5", text: "#4a148c" },
   };
 
-  const renderColumnaResumen = (lista, titulo) => (
+  const renderColumnaResumen = (lista, titulo, mesYaPaso) => (
     <div style={styles.resumenCol}>
       <div style={styles.resumenHeader}>
         <h3 style={styles.resumenTitulo}>{titulo}</h3>
@@ -487,12 +542,33 @@ export default function Admin() {
       ) : (
         lista.map((emp, i) => (
           <div key={i} style={styles.resumenFila}>
-            <div style={styles.resumenNombre}>{emp.nombre}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={styles.resumenNombre}>{emp.nombre}</div>
+              {mesYaPaso && emp.confirmados !== null && (
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 6,
+                  background: emp.confirmados === emp.dias ? "#eafaf1"
+                    : emp.confirmados === 0 ? "#fdf2f2" : "#fef9e7",
+                  color: emp.confirmados === emp.dias ? "#27ae60"
+                    : emp.confirmados === 0 ? "#e74c3c" : "#856404",
+                }}>
+                  {emp.confirmados}/{emp.dias} confirmados
+                </span>
+              )}
+            </div>
             <div style={styles.resumenDias}>
               {emp.detalle.map((d, j) => {
                 const color = COLORES_TURNO[d.turno] || { bg: "#f5f5f5", text: "#333" };
+                // Verificar si este día ya pasó
+                const fechaDia = new Date(d.fecha);
+                const yaOcurrio = fechaDia < ahora;
                 return (
-                  <span key={j} style={{ ...styles.resumenChip, background: color.bg, color: color.text }}>
+                  <span key={j} style={{
+                    ...styles.resumenChip,
+                    background: yaOcurrio ? "#f0f2f5" : color.bg,
+                    color: yaOcurrio ? "#aaa" : color.text,
+                    textDecoration: yaOcurrio ? "line-through" : "none",
+                  }}>
                     {d.label} {d.turno === "mañana" ? "☀️" : d.turno === "tarde" ? "🌅" : "🌙"}
                   </span>
                 );
@@ -579,7 +655,6 @@ export default function Admin() {
   const renderEspecialidad = (e) => {
     const esp = e.especialidad;
     const color = esp ? (COLORES_ESP[esp] || { bg: "#f0f2f5", text: "#666" }) : null;
-
     if (editandoEsp === e.id) {
       return (
         <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
@@ -607,14 +682,10 @@ export default function Admin() {
         </div>
       );
     }
-
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
         {esp ? (
-          <span style={{
-            fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
-            background: color.bg, color: color.text,
-          }}>
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: color.bg, color: color.text }}>
             {esp}
           </span>
         ) : (
@@ -633,6 +704,8 @@ export default function Admin() {
   const historialVisible = historialExpandido
     ? historialCambios.slice(0, 10)
     : historialCambios.slice(0, 5);
+
+  const mesSeleccionado = resumenMeses.find(m => m.key === mesResumenSeleccionado);
 
   return (
     <div style={styles.container}>
@@ -801,14 +874,54 @@ export default function Admin() {
 
         {seccion === "resumen" && (
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>Resumen de distribución — {nombreMes} {anioProximo}</h2>
-            {resumenQ1.length === 0 && resumenQ2.length === 0 ? (
-              <div style={styles.aviso}>📊 Todavía no se generó la distribución para este mes.</div>
+            <h2 style={styles.cardTitle}>📊 Resumen de distribuciones</h2>
+
+            {resumenMeses.length === 0 ? (
+              <div style={styles.aviso}>No hay distribuciones generadas todavía.</div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 16 }}>
-                {renderColumnaResumen(resumenQ1, "1ra Quincena (1-15)")}
-                {renderColumnaResumen(resumenQ2, "2da Quincena (16-fin)")}
-              </div>
+              <>
+                {/* Selector de mes */}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                  {resumenMeses.map(m => (
+                    <button
+                      key={m.key}
+                      style={{
+                        padding: "6px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                        background: mesResumenSeleccionado === m.key ? "#1a1a2e" : "white",
+                        color: mesResumenSeleccionado === m.key ? "white" : "#666",
+                        border: `1px solid ${mesResumenSeleccionado === m.key ? "#1a1a2e" : "#ddd"}`,
+                        fontWeight: mesResumenSeleccionado === m.key ? 700 : 400,
+                        textTransform: "capitalize",
+                      }}
+                      onClick={() => setMesResumenSeleccionado(m.key)}
+                    >
+                      {m.label}
+                      {m.esFuturo && <span style={{ marginLeft: 4, fontSize: 10, color: mesResumenSeleccionado === m.key ? "#adf" : "#3f51b5" }}>próximo</span>}
+                    </button>
+                  ))}
+                </div>
+
+                {mesSeleccionado && (
+                  <>
+                    {/* Aclaración */}
+                    <div style={{ fontSize: 12, color: "#999", marginBottom: 12, fontStyle: "italic" }}>
+                      {mesSeleccionado.esFuturo
+                        ? "Distribución generada para el próximo mes. Los días no han ocurrido aún."
+                        : "Distribución original tal como fue lanzada. Los días tachados ya ocurrieron. Los números muestran asistencias confirmadas sobre días asignados."
+                      }
+                    </div>
+
+                    {mesSeleccionado.q1.length === 0 && mesSeleccionado.q2.length === 0 ? (
+                      <div style={styles.aviso}>Sin datos para este mes.</div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                        {renderColumnaResumen(mesSeleccionado.q1, "1ra Quincena (1-15)", !mesSeleccionado.esFuturo)}
+                        {renderColumnaResumen(mesSeleccionado.q2, "2da Quincena (16-fin)", !mesSeleccionado.esFuturo)}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
             )}
           </div>
         )}
@@ -955,7 +1068,6 @@ export default function Admin() {
                 </div>
               )}
             </div>
-
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>
                 📋 Historial de cambios
