@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react";
-import { auth } from "../firebase";
+import { auth, db } from "../firebase";
+import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 
 const PALABRAS = [
   "RADAR","FLAPS","PITCH","STALL","RADIO","PISTA","TOWER","SPEED","CLIMB","GLIDE",
   "FLARE","BRAKE","BOOST","CARGO","DELTA","OSCAR","ROMEO","TANGO","ULTRA","VAPOR",
   "KNOTS","LASER","MILLA","NODOS","PULSO","SIGMA","XENON","YAWEO","TIRES","SHOCK",
   "PROBE","OZONE","NIGHT","MIXER","LEVER","INLET","GAUGE","FENCE","DRAIN","CHORD",
-  "BLADE","HIELO","NIEVE","TURBO","SERVO","AVION","VUELO","MOTOR","VIRAJE".slice(0,5),
+  "BLADE","HIELO","NIEVE","TURBO","SERVO","AVION","VUELO","MOTOR","VIRAJ",
   "MORRO","NORTE","GRUES","PAUSA","BALOM","CABLE","HERTZ","IONES","JATOS","RACON",
   "TENOR","VOLTS","WATTS","WINGS","EXTRA","HATCH","ELBOW","ABAFT","AHEAD","BELOW",
-  "ALTIT".slice(0,5),"UPPER","VHFOR","YOKEL","ZONES","RUDDE","GRABA","ENFOK","FULSA",
+  "ALTIT","UPPER","RUDDE","GRABA","ENFOK",
 ].map(p => p.replace(/[^A-Z]/g,'').slice(0,5)).filter(p => p.length === 5);
 
 const PALABRAS_LIMPIAS = [...new Set(PALABRAS)];
@@ -64,10 +65,23 @@ export default function Wordle() {
   }, [tab, juegoTerminado, intentoActual, intentos]);
 
   const iniciar = async () => {
-    const estadoGuardado = localStorage.getItem("wordle_estado_" + getTodayKey());
-    const nombreGuardado = localStorage.getItem("wordle_nombre");
-    if (nombreGuardado) setUserName(nombreGuardado);
+    // 1. Leer nombre del empleado desde Firestore
+    let nombre = "Anónimo";
+    if (user) {
+      try {
+        const snap = await getDoc(doc(db, "empleados", user.uid));
+        if (snap.exists()) {
+          const data = snap.data();
+          nombre = `${data.apellido}, ${data.nombre}`;
+        }
+      } catch (e) {
+        console.error("Error leyendo empleado:", e);
+      }
+    }
+    setUserName(nombre);
 
+    // 2. Recuperar estado del día desde localStorage
+    const estadoGuardado = localStorage.getItem("wordle_estado_" + getTodayKey());
     if (estadoGuardado) {
       const estado = JSON.parse(estadoGuardado);
       setIntentos(estado.intentos);
@@ -119,36 +133,71 @@ export default function Wordle() {
   };
 
   const guardarResultado = async (intentosFinal, gano) => {
-    const nombre = userName || (user?.email?.split("@")[0] || "Anónimo");
-    localStorage.setItem("wordle_estado_" + getTodayKey(), JSON.stringify({ intentos: intentosFinal, gano, nombre }));
+    // Guardar estado local para no repetir hoy
+    localStorage.setItem("wordle_estado_" + getTodayKey(), JSON.stringify({ intentos: intentosFinal, gano }));
 
-    // Ranking diario — en localStorage como base (sin Firebase para no agregar colecciones)
-    const keyD = "wordle_ranking_" + getTodayKey();
-    const diario = JSON.parse(localStorage.getItem(keyD) || "{}");
-    diario[nombre] = { nombre, intentos: intentosFinal.length, gano, ts: Date.now() };
-    localStorage.setItem(keyD, JSON.stringify(diario));
+    const nombre = userName;
+    const uid = user?.uid || "anonimo";
 
-    const keyM = "wordle_ranking_mes_" + getMonthKey();
-    const mensual = JSON.parse(localStorage.getItem(keyM) || "{}");
-    if (!mensual[nombre]) mensual[nombre] = { nombre, victorias: 0, totalIntentos: 0, partidas: 0 };
-    mensual[nombre].partidas++;
-    if (gano) { mensual[nombre].victorias++; mensual[nombre].totalIntentos += intentosFinal.length; }
-    localStorage.setItem(keyM, JSON.stringify(mensual));
+    // --- Ranking diario en Firestore ---
+    // Documento: wordleRanking/{fecha}
+    // Campo: jugadores[uid] = { nombre, intentos, gano, ts }
+    try {
+      const refDiario = doc(db, "wordleRanking", getTodayKey());
+      const snapDiario = await getDoc(refDiario);
+      const jugadores = snapDiario.exists() ? (snapDiario.data().jugadores || {}) : {};
+      jugadores[uid] = { nombre, intentos: intentosFinal.length, gano, ts: Date.now() };
+      await setDoc(refDiario, { jugadores }, { merge: true });
+    } catch (e) {
+      console.error("Error guardando ranking diario:", e);
+    }
+
+    // --- Ranking mensual en Firestore ---
+    // Documento: wordleRankingMensual/{año-mes}
+    // Campo: jugadores[uid] = { nombre, victorias, totalIntentos, partidas }
+    try {
+      const refMensual = doc(db, "wordleRankingMensual", getMonthKey());
+      const snapMensual = await getDoc(refMensual);
+      const jugadores = snapMensual.exists() ? (snapMensual.data().jugadores || {}) : {};
+      if (!jugadores[uid]) jugadores[uid] = { nombre, victorias: 0, totalIntentos: 0, partidas: 0 };
+      // Actualizar nombre por si cambió
+      jugadores[uid].nombre = nombre;
+      jugadores[uid].partidas++;
+      if (gano) {
+        jugadores[uid].victorias++;
+        jugadores[uid].totalIntentos += intentosFinal.length;
+      }
+      await setDoc(refMensual, { jugadores }, { merge: true });
+    } catch (e) {
+      console.error("Error guardando ranking mensual:", e);
+    }
   };
 
-  const cargarRankings = () => {
-    const keyD = "wordle_ranking_" + getTodayKey();
-    const diario = JSON.parse(localStorage.getItem(keyD) || "{}");
-    const listaDiaria = Object.values(diario)
-      .sort((a, b) => (a.gano === b.gano ? a.intentos - b.intentos : b.gano - a.gano));
-    setRankingDiario(listaDiaria);
+  const cargarRankings = async () => {
+    // Ranking diario
+    try {
+      const snapDiario = await getDoc(doc(db, "wordleRanking", getTodayKey()));
+      const jugadores = snapDiario.exists() ? Object.values(snapDiario.data().jugadores || {}) : [];
+      const listaDiaria = jugadores.sort((a, b) =>
+        a.gano === b.gano ? a.intentos - b.intentos : (b.gano ? 1 : -1)
+      );
+      setRankingDiario(listaDiaria);
+    } catch (e) {
+      setRankingDiario([]);
+    }
 
-    const keyM = "wordle_ranking_mes_" + getMonthKey();
-    const mensual = JSON.parse(localStorage.getItem(keyM) || "{}");
-    const listaMensual = Object.values(mensual)
-      .sort((a, b) => b.victorias !== a.victorias ? b.victorias - a.victorias
-        : (a.victorias > 0 ? a.totalIntentos / a.victorias : 99) - (b.victorias > 0 ? b.totalIntentos / b.victorias : 99));
-    setRankingMensual(listaMensual);
+    // Ranking mensual
+    try {
+      const snapMensual = await getDoc(doc(db, "wordleRankingMensual", getMonthKey()));
+      const jugadores = snapMensual.exists() ? Object.values(snapMensual.data().jugadores || {}) : [];
+      const listaMensual = jugadores.sort((a, b) =>
+        b.victorias !== a.victorias ? b.victorias - a.victorias
+          : (a.victorias > 0 ? a.totalIntentos / a.victorias : 99) - (b.victorias > 0 ? b.totalIntentos / b.victorias : 99)
+      );
+      setRankingMensual(listaMensual);
+    } catch (e) {
+      setRankingMensual([]);
+    }
   };
 
   const estadosLetras = {};
@@ -172,18 +221,27 @@ export default function Wordle() {
 
   if (!cargado) return null;
 
+  // Tamaños responsivos: se achican en pantallas chicas
+  const celdaSize = "clamp(38px, 11vw, 52px)";
+  const celdaFont = "clamp(15px, 4vw, 20px)";
+  const teclaMin = "clamp(24px, 7.5vw, 34px)";
+  const teclaEsp = "clamp(38px, 11vw, 52px)";
+  const teclaH = "clamp(34px, 9vw, 42px)";
+  const teclaFont = "clamp(10px, 3vw, 14px)";
+  const teclaFontEsp = "clamp(9px, 2.5vw, 11px)";
+
   return (
-    <div style={{ padding: "16px 12px", maxWidth: 420, margin: "0 auto" }}>
+    <div style={{ padding: "16px 8px", maxWidth: 420, margin: "0 auto" }}>
       <div style={{ textAlign: "center", marginBottom: 4 }}>
         <span style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e" }}>AeroWordle</span>
       </div>
       <div style={{ textAlign: "center", fontSize: 12, color: "#999", marginBottom: 16, textTransform: "capitalize" }}>{nombreHoy}</div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
         {[["juego","Juego"],["diario","Ranking diario"],["mensual","Ranking mensual"]].map(([k, label]) => (
           <button key={k} style={{
-            padding: "6px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+            padding: "6px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
             background: tab === k ? "#1a1a2e" : "white",
             color: tab === k ? "white" : "#666",
             border: `1px solid ${tab === k ? "#1a1a2e" : "#ddd"}`,
@@ -206,21 +264,10 @@ export default function Wordle() {
             ))}
           </div>
 
-          {/* Nombre */}
-          {!userName && (
-            <div style={{ marginBottom: 12, display: "flex", gap: 8 }}>
-              <input
-                placeholder="Tu nombre para el ranking"
-                style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid #ddd", fontSize: 14 }}
-                onBlur={e => { if (e.target.value.trim()) { setUserName(e.target.value.trim()); localStorage.setItem("wordle_nombre", e.target.value.trim()); }}}
-              />
-            </div>
-          )}
-
           {/* Tablero */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center", marginBottom: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "clamp(4px, 1.5vw, 6px)", alignItems: "center", marginBottom: 14 }}>
             {Array.from({ length: MAX_INTENTOS }).map((_, i) => (
-              <div key={i} style={{ display: "flex", gap: 6 }}>
+              <div key={i} style={{ display: "flex", gap: "clamp(4px, 1.5vw, 6px)" }}>
                 {Array.from({ length: 5 }).map((_, j) => {
                   let letra = "", estado = "";
                   if (i < intentos.length) { letra = intentos[i][j].letra; estado = intentos[i][j].estado; }
@@ -230,8 +277,9 @@ export default function Wordle() {
                   const border = estado ? "none" : letra ? "1px solid #1a1a2e" : "1px solid #ddd";
                   return (
                     <div key={j} style={{
-                      width: 52, height: 52, display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 20, fontWeight: 700, borderRadius: 8,
+                      width: celdaSize, height: celdaSize,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: celdaFont, fontWeight: 700, borderRadius: 8,
                       background: bg, color, border, textTransform: "uppercase",
                     }}>
                       {letra}
@@ -247,30 +295,34 @@ export default function Wordle() {
 
           {/* Resultado */}
           {juegoTerminado && (
-            <div style={{ textAlign: "center", padding: "12px 0", marginBottom: 12 }}>
+            <div style={{ textAlign: "center", padding: "10px 0", marginBottom: 10 }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: gano ? "#1D9E75" : "#e74c3c", marginBottom: 4 }}>
                 {gano ? `Ganaste en ${intentos.length} intento${intentos.length > 1 ? "s" : ""}!` : "No fue esta vez"}
               </div>
               <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>La palabra era</div>
-              <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 4, color: "#1a1a2e", marginBottom: 8 }}>{PALABRA}</div>
+              <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: 4, color: "#1a1a2e", marginBottom: 6 }}>{PALABRA}</div>
               <div style={{ fontSize: 12, color: "#aaa" }}>Volvé mañana para una nueva palabra</div>
             </div>
           )}
 
           {/* Teclado */}
           {!juegoTerminado && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "clamp(4px, 1.5vw, 6px)", alignItems: "center" }}>
               {filasTeclado.map((fila, fi) => (
-                <div key={fi} style={{ display: "flex", gap: 5 }}>
+                <div key={fi} style={{ display: "flex", gap: "clamp(3px, 1vw, 5px)" }}>
                   {fila.map(k => {
                     const est = estadosLetras[k];
                     const bg = est === "correct" ? COLORES.correct : est === "present" ? COLORES.present : est === "absent" ? "#ccc" : "#e9ecef";
                     const color = est ? "white" : "#1a1a2e";
+                    const esEspecial = k.length > 1;
                     return (
                       <button key={k} onClick={() => handleKey(k)} style={{
-                        minWidth: k.length > 1 ? 52 : 34, height: 42,
+                        minWidth: esEspecial ? teclaEsp : teclaMin,
+                        height: teclaH,
                         borderRadius: 6, border: "none", background: bg, color,
-                        fontSize: k.length > 1 ? 11 : 14, fontWeight: 600, cursor: "pointer",
+                        fontSize: esEspecial ? teclaFontEsp : teclaFont,
+                        fontWeight: 600, cursor: "pointer",
+                        padding: 0,
                       }}>
                         {k}
                       </button>
@@ -286,7 +338,9 @@ export default function Wordle() {
       {tab === "diario" && (
         <div>
           <div style={{ fontSize: 12, color: "#999", marginBottom: 12, textAlign: "center" }}>Hoy — {nombreHoy}</div>
-          {!rankingDiario || rankingDiario.length === 0 ? (
+          {!rankingDiario ? (
+            <div style={{ textAlign: "center", color: "#999", fontSize: 14, padding: 24 }}>Cargando...</div>
+          ) : rankingDiario.length === 0 ? (
             <div style={{ textAlign: "center", color: "#999", fontSize: 14, padding: 24 }}>Nadie jugó hoy todavía</div>
           ) : rankingDiario.map((j, i) => (
             <div key={i} style={{
@@ -306,7 +360,9 @@ export default function Wordle() {
       {tab === "mensual" && (
         <div>
           <div style={{ fontSize: 12, color: "#999", marginBottom: 12, textAlign: "center", textTransform: "capitalize" }}>{nombreMes}</div>
-          {!rankingMensual || rankingMensual.length === 0 ? (
+          {!rankingMensual ? (
+            <div style={{ textAlign: "center", color: "#999", fontSize: 14, padding: 24 }}>Cargando...</div>
+          ) : rankingMensual.length === 0 ? (
             <div style={{ textAlign: "center", color: "#999", fontSize: 14, padding: 24 }}>Sin datos este mes</div>
           ) : rankingMensual.map((j, i) => {
             const avg = j.victorias > 0 ? (j.totalIntentos / j.victorias).toFixed(1) : "-";
