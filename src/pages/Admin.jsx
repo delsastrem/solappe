@@ -7,6 +7,7 @@ import {
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
+import Wordle from "./Wordle";
 
 const ESPECIALIDADES = ["MONTAJE", "AVIONICA", "MOTORES", "RADIO", "SCO"];
 
@@ -514,6 +515,7 @@ export default function Admin() {
     if (s === "cambios") return solicitudesPendientes.length > 0
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
+    if (s === "wordle") return "🎮 Wordle";
     return "🔑 Mi cuenta";
   };
 
@@ -723,7 +725,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "resumen", "calendario", "asistencia", "cambios", "cuenta"].map(s => (
+        {["empleados","inscripciones","resumen","calendario","asistencia","cambios","wordle","cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -1093,6 +1095,11 @@ export default function Admin() {
           </>
         )}
 
+        {seccion === "wordle" && (
+  <div style={styles.card}>
+    <Wordle />
+  </div>
+)}
         {seccion === "cuenta" && (
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>🔑 Mi cuenta</h2>
@@ -1262,4 +1269,4 @@ const styles = {
   },
   ratioTitulo: { fontSize: 14, fontWeight: 600, color: "#1a1a2e" },
   ratioNumero: { fontSize: 15, fontWeight: 700 },
-};
+};  

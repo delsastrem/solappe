@@ -3,6 +3,7 @@ import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvide
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc } from "firebase/firestore";
 import Calendario from "./Calendario";
+import Wordle from "./Wordle";
 
 export default function Dashboard() {
   const [empleado, setEmpleado] = useState(null);
@@ -127,8 +128,6 @@ export default function Dashboard() {
   const cargarResumen = async () => {
     const snapAsig = await getDocs(collection(db, "asignaciones"));
     const mapaEmp = { ...empleados };
-
-    // Agrupar por mes/año
     const porMes = {};
     snapAsig.docs.forEach(d => {
       const data = d.data();
@@ -136,35 +135,24 @@ export default function Dashboard() {
       if (!porMes[key]) porMes[key] = { anio: data.anio, mes: data.mes, docs: [] };
       porMes[key].docs.push(data);
     });
-
     const meses = Object.values(porMes).sort((a, b) => {
       if (a.anio !== b.anio) return b.anio - a.anio;
       return b.mes - a.mes;
     });
-
     const resultado = meses.map(({ anio: a, mes: m, docs }) => {
-      const label = new Date(a, m - 1, 1)
-        .toLocaleString("es-AR", { month: "long", year: "numeric" });
+      const label = new Date(a, m - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
       const esFuturo = a > anio || (a === anio && m > mes);
-
       const mapear = (quincena) =>
-        docs
-          .filter(d => d.quincena === quincena)
-          .map(d => {
-            const emp = mapaEmp[d.empleadoId];
-            const esMio = d.empleadoId === user.uid;
-            return {
-              nombre: emp ? `${emp.apellido}, ${emp.nombre}` : d.empleadoId,
-              dias: d.dias.length,
-              detalle: d.dias,
-              esMio,
-            };
-          })
-          .sort((a, b) => a.nombre.localeCompare(b.nombre));
-
+        docs.filter(d => d.quincena === quincena).map(d => {
+          const emp = mapaEmp[d.empleadoId];
+          const esMio = d.empleadoId === user.uid;
+          return {
+            nombre: emp ? `${emp.apellido}, ${emp.nombre}` : d.empleadoId,
+            dias: d.dias.length, detalle: d.dias, esMio,
+          };
+        }).sort((a, b) => a.nombre.localeCompare(b.nombre));
       return { key: `${a}-${m}`, label, anio: a, mes: m, esFuturo, q1: mapear(1), q2: mapear(2) };
     });
-
     setResumenMeses(resultado);
     if (resultado.length > 0 && !mesResumenSeleccionado) {
       setMesResumenSeleccionado(resultado[0].key);
@@ -205,20 +193,13 @@ export default function Dashboard() {
   };
 
   const inscribirse = async () => {
-    if (!preferencia) {
-      setMensaje("Elegí una preferencia antes de inscribirte");
-      return;
-    }
+    if (!preferencia) { setMensaje("Elegí una preferencia antes de inscribirte"); return; }
     setLoading(true);
     setMensaje("");
     const inscKey = `${anioProximo}-${mesProximo}`;
     await setDoc(doc(db, "inscripciones", `${user.uid}_${inscKey}`), {
-      empleadoId: user.uid,
-      nombre: empleado.nombre,
-      apellido: empleado.apellido,
-      preferencia,
-      mes: mesProximo,
-      anio: anioProximo,
+      empleadoId: user.uid, nombre: empleado.nombre, apellido: empleado.apellido,
+      preferencia, mes: mesProximo, anio: anioProximo,
       fechaInscripcion: new Date().toISOString(),
     });
     setMensaje("✓ Inscripción guardada correctamente");
@@ -236,18 +217,9 @@ export default function Dashboard() {
   };
 
   const cambiarPassword = async () => {
-    if (!passActual || !passNueva || !passConfirm) {
-      setMensajePass("Completá todos los campos");
-      return;
-    }
-    if (passNueva !== passConfirm) {
-      setMensajePass("Las contraseñas nuevas no coinciden");
-      return;
-    }
-    if (passNueva.length < 6) {
-      setMensajePass("La contraseña nueva debe tener al menos 6 caracteres");
-      return;
-    }
+    if (!passActual || !passNueva || !passConfirm) { setMensajePass("Completá todos los campos"); return; }
+    if (passNueva !== passConfirm) { setMensajePass("Las contraseñas nuevas no coinciden"); return; }
+    if (passNueva.length < 6) { setMensajePass("La contraseña nueva debe tener al menos 6 caracteres"); return; }
     setLoadingPass(true);
     setMensajePass("");
     try {
@@ -266,13 +238,10 @@ export default function Dashboard() {
     setLoadingPass(false);
   };
 
-  const exportarICS = (soloMes = null) => {
+  const exportarICS = () => {
     let dias = [];
     misAsignaciones.forEach(asig => {
-      asig.dias.forEach(d => {
-        if (soloMes && asig.mes !== soloMes) return;
-        dias.push({ fecha: d.fecha, turno: d.turno, label: d.label });
-      });
+      asig.dias.forEach(d => { dias.push({ fecha: d.fecha, turno: d.turno, label: d.label }); });
     });
     if (dias.length === 0) { alert("No tenés días asignados para exportar."); return; }
     const turnoHoras = {
@@ -319,6 +288,7 @@ export default function Dashboard() {
     if (s === "calendario") return "📅 Calendario";
     if (s === "resumen") return "📊 Resumen";
     if (s === "cambios") return total > 0 ? `🔄 Cambios (${total})` : "🔄 Cambios";
+    if (s === "wordle") return "✈️ AeroWordle";
     return "🔑 Mi cuenta";
   };
 
@@ -431,7 +401,7 @@ export default function Dashboard() {
       </div>
 
       <div style={styles.tabs}>
-        {["inscripcion", "calendario", "resumen", "cambios", "cuenta"].map(s => (
+        {["inscripcion", "calendario", "resumen", "cambios", "wordle", "cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -542,7 +512,6 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
-
                 {mesSeleccionado && (
                   <>
                     <div style={{ fontSize: 12, color: "#999", marginBottom: 12, fontStyle: "italic" }}>
@@ -655,6 +624,12 @@ export default function Dashboard() {
               )}
             </div>
           </>
+        )}
+
+        {seccion === "wordle" && (
+          <div style={styles.card}>
+            <Wordle />
+          </div>
         )}
 
         {seccion === "cuenta" && (
