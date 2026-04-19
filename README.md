@@ -44,58 +44,9 @@ Coordinar los turnos rotativos de un equipo aeronáutico (mañana, tarde, noche)
 | Frontend | React 18 + Vite |
 | Autenticación | Firebase Auth |
 | Base de datos | Cloud Firestore |
-| Hosting | Vercel — CI/CD automático via GitHub |
+| Hosting | Vercel (CI/CD automático via GitHub) |
 | Estilos | CSS puro |
 
 ---
 
 ## Arquitectura
-
-```
-src/
-├── pages/
-│   ├── Login.jsx       — Autenticación Firebase
-│   ├── Dashboard.jsx   — Vista empleado
-│   └── Admin.jsx       — Panel administrador
-├── utils/              — Lógica de distribución y helpers
-├── firebase.js         — Configuración Firebase (via env vars)
-└── App.jsx             — Router con auth guard por rol
-```
-
-El sistema distingue dos roles (admin / empleado) detectados en Firestore al hacer login y protege las rutas correspondientes.
-
----
-
-## Variables de entorno
-
-Copiá `.env.example` a `.env` y completá con tus credenciales de Firebase:
-
-```
-VITE_FIREBASE_API_KEY=
-VITE_FIREBASE_AUTH_DOMAIN=
-VITE_FIREBASE_PROJECT_ID=
-VITE_FIREBASE_STORAGE_BUCKET=
-VITE_FIREBASE_MESSAGING_SENDER_ID=
-VITE_FIREBASE_APP_ID=
-```
-
----
-
-## Correr localmente
-
-```bash
-npm install
-npm run dev
-```
-
----
-
-## Contexto del proyecto
-
-Desarrollé solAPPe sin experiencia previa en programación, partiendo de cero. El proyecto nació de una necesidad real en mi lugar de trabajo y evolucionó de forma iterativa incorporando feedback directo de los usuarios (mis compañeros de equipo). Hoy está en producción activa y reemplaza completamente el flujo manual anterior.
-
----
-
-## Autor
-
-**Marcelo Delsastre** — [@delsastrem](https://github.com/delsastrem)

@@ -8,6 +8,7 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
+import { suscribirNotificaciones } from "../utils/notificaciones";
 
 const ESPECIALIDADES = ["MONTAJE", "AVIONICA", "MOTORES", "RADIO", "SCO"];
 
@@ -70,6 +71,7 @@ export default function Admin() {
     cargarInscripciones();
     cargarEmpleadoActual();
     cargarSolicitudes();
+    if (user) suscribirNotificaciones(user.uid);
   }, []);
 
   useEffect(() => {

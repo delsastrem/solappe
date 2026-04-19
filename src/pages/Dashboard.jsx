@@ -4,6 +4,7 @@ import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc } from "firebase/firestore";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
+import { suscribirNotificaciones } from "../utils/notificaciones";
 
 export default function Dashboard() {
   const [empleado, setEmpleado] = useState(null);
@@ -51,6 +52,7 @@ export default function Dashboard() {
     cargarRatioPropio();
     cargarHistorialPropio();
     cargarMisAsignaciones();
+    if (user) suscribirNotificaciones(user.uid);
   }, []);
 
   useEffect(() => {

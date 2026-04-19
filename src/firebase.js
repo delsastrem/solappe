@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getMessaging, isSupported } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -18,3 +19,10 @@ export const db = getFirestore(app);
 // Segunda instancia solo para crear usuarios sin afectar la sesión actual
 const appSecundaria = initializeApp(firebaseConfig, "secundaria");
 export const authSecundaria = getAuth(appSecundaria);
+
+// Messaging — solo si el browser lo soporta
+export const getMessagingInstance = async () => {
+  const supported = await isSupported();
+  if (!supported) return null;
+  return getMessaging(app);
+};
