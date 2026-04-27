@@ -128,9 +128,11 @@ exports.recordatorioSolape = onSchedule("0 23 * * *", async () => {
       notificados.add(empleadoId);
       const turno = diaEncontrado.label || diaEncontrado.turno;
       await notificarUsuario(
-        empleadoId,
-        "⏰ Recordatorio de turno",
-        `Mañana tenés turno ${turno} — no te olvides de confirmar asistencia`
+     empleadoId,
+      "⏰ Recordatorio de solape",
+     turno.toLowerCase().includes("noche")
+     ? `Hoy estás de solape, entrás 22hs!`
+     : `Mañana tenés Solape de ${turno} — no te olvides!!`
       );
     }
   }
@@ -160,4 +162,33 @@ exports.recordatorioSolape = onSchedule("0 23 * * *", async () => {
       `${nombres.length} empleado${nombres.length > 1 ? "s" : ""} trabajan mañana: ${nombres.join(" / ")}`
     );
   }
-});
+});// ─────────────────────────────────────────────────────────────────────────────
+// FUNCIÓN 4: Notificar aviso broadcast a todos los usuarios
+// Se dispara cuando se crea un doc en "notificaciones"
+// ─────────────────────────────────────────────────────────────────────────────
+exports.notificarAvisoBroadcast = onDocumentCreated(
+  "notificaciones/{notifId}",
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+
+    const { mensaje } = data;
+
+    // Obtener todos los empleados con sus tokens
+    const snapEmpleados = await db.collection("empleados").get();
+
+    const promesas = [];
+    snapEmpleados.forEach((docSnap) => {
+      promesas.push(
+        notificarUsuario(
+          docSnap.id,
+          "📢 Aviso de solAPPe",
+          mensaje
+        )
+      );
+    });
+
+    await Promise.all(promesas);
+    console.log(`Aviso enviado a ${promesas.length} usuarios`);
+  }
+);

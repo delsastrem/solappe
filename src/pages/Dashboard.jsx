@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc } from "firebase/firestore";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
-import { suscribirNotificaciones } from "../utils/notificaciones";
+import { marcarLeido, suscribirAvisos } from "../utils/avisos";
 
 export default function Dashboard() {
   const [empleado, setEmpleado] = useState(null);
@@ -30,6 +30,11 @@ export default function Dashboard() {
   const [resumenMeses, setResumenMeses] = useState([]);
   const [mesResumenSeleccionado, setMesResumenSeleccionado] = useState(null);
 
+  // Notificaciones
+  const [notificaciones, setNotificaciones] = useState([]);
+  const [campanaAbierta, setCampanaAbierta] = useState(false);
+  const campanaRef = useRef(null);
+
   const user = auth.currentUser;
   const ahora = new Date();
   const mes = ahora.getMonth() + 1;
@@ -39,10 +44,24 @@ export default function Dashboard() {
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
 
+  // Notificaciones no leídas
+  const noLeidas = notificaciones.filter(n => !n.leidoPor?.includes(user?.uid));
+
   useEffect(() => {
     const handleResize = () => setMobile(window.innerWidth < 640);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Cerrar campanita al hacer click afuera
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (campanaRef.current && !campanaRef.current.contains(e.target)) {
+        setCampanaAbierta(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   useEffect(() => {
@@ -52,7 +71,12 @@ export default function Dashboard() {
     cargarRatioPropio();
     cargarHistorialPropio();
     cargarMisAsignaciones();
-    if (user) suscribirNotificaciones(user.uid);
+
+    // Suscripción en tiempo real a notificaciones
+    if (user) {
+      const unsub = suscribirAvisos(user.uid, setNotificaciones);
+      return () => unsub();
+    }
   }, []);
 
   useEffect(() => {
@@ -240,6 +264,24 @@ export default function Dashboard() {
     setLoadingPass(false);
   };
 
+  // Abrir campanita y marcar todas como leídas
+  const handleAbrirCampana = async () => {
+    const abriendo = !campanaAbierta;
+    setCampanaAbierta(abriendo);
+    if (abriendo && user) {
+      const sinLeer = notificaciones.filter(n => !n.leidoPor?.includes(user.uid));
+      for (const n of sinLeer) {
+        await marcarLeido(n.id, user.uid);
+      }
+    }
+  };
+
+  const formatFecha = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }) +
+      " " + d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  };
+
   const exportarICS = () => {
     let dias = [];
     misAsignaciones.forEach(asig => {
@@ -251,7 +293,7 @@ export default function Dashboard() {
       tarde:  { inicio: "150000", fin: "230000" },
       noche:  { inicio: "230000", fin: "070000" },
     };
-    const formatFecha = (isoStr, horaStr) => {
+    const formatFechaICS = (isoStr, horaStr) => {
       const f = new Date(isoStr);
       return `${f.getFullYear()}${String(f.getMonth()+1).padStart(2,"0")}${String(f.getDate()).padStart(2,"0")}T${horaStr}`;
     };
@@ -264,8 +306,8 @@ export default function Dashboard() {
     dias.forEach((d, i) => {
       const horas = turnoHoras[d.turno] || { inicio: "080000", fin: "160000" };
       const esNoche = d.turno === "noche";
-      const dtStart = formatFecha(d.fecha, horas.inicio);
-      const dtEnd = esNoche ? formatFechaSiguiente(d.fecha, horas.fin) : formatFecha(d.fecha, horas.fin);
+      const dtStart = formatFechaICS(d.fecha, horas.inicio);
+      const dtEnd = esNoche ? formatFechaSiguiente(d.fecha, horas.fin) : formatFechaICS(d.fecha, horas.fin);
       const turnoLabel = d.turno === "mañana" ? "☀️ Mañana" : d.turno === "tarde" ? "🌅 Tarde" : "🌙 Noche";
       ics += `BEGIN:VEVENT\r\nUID:solappe-${user.uid}-${i}@solappe\r\nDTSTART;TZID=America/Argentina/Buenos_Aires:${dtStart}\r\nDTEND;TZID=America/Argentina/Buenos_Aires:${dtEnd}\r\nSUMMARY:Solape — ${turnoLabel}\r\nDESCRIPTION:Turno de solape generado por solAPPe\r\nEND:VEVENT\r\n`;
     });
@@ -396,6 +438,62 @@ export default function Dashboard() {
           {empleado && !mobile && (
             <span style={styles.bienvenida}>{empleado.apellido}, {empleado.nombre}</span>
           )}
+
+          {/* Campanita */}
+          <div ref={campanaRef} style={{ position: "relative" }}>
+            <button
+              style={styles.campanaBtn}
+              onClick={handleAbrirCampana}
+              title="Avisos"
+            >
+              🔔
+              {noLeidas.length > 0 && (
+                <span style={styles.campanaBadge}>{noLeidas.length}</span>
+              )}
+            </button>
+
+            {campanaAbierta && (
+              <div style={styles.campanaPanel}>
+                <div style={styles.campanaPanelHeader}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>🔔 Avisos</span>
+                  {noLeidas.length > 0 && (
+                    <span style={{ fontSize: 12, background: "#3f51b5", color: "white", padding: "2px 8px", borderRadius: 10, fontWeight: 600 }}>
+                      {noLeidas.length} nuevo{noLeidas.length > 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                {notificaciones.length === 0 ? (
+                  <div style={styles.campanaSinAvisos}>Sin avisos por el momento</div>
+                ) : (
+                  <div style={styles.campanaLista}>
+                    {notificaciones.map(n => {
+                      const leido = n.leidoPor?.includes(user?.uid);
+                      return (
+                        <div key={n.id} style={{
+                          ...styles.campanaItem,
+                          background: leido ? "white" : "#f0f4ff",
+                          borderLeft: leido ? "3px solid #eee" : "3px solid #3f51b5",
+                        }}>
+                          {!leido && (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#3f51b5", marginBottom: 4, display: "block" }}>
+                              NUEVO
+                            </span>
+                          )}
+                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>
+                            {n.mensaje}
+                          </p>
+                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>
+                            {formatFecha(n.creadoEn)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <button style={styles.logout} onClick={() => signOut(auth)}>
             {mobile ? "Salir" : "Cerrar sesión"}
           </button>
@@ -695,7 +793,41 @@ const styles = {
   bienvenida: { fontSize: 14, opacity: 0.85 },
   logout: {
     background: "transparent", border: "1px solid white", color: "white",
-    padding: "6px 12px", borderRadius: 8, fontSize: 13,
+    padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+  },
+  // Campanita
+  campanaBtn: {
+    position: "relative", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)",
+    borderRadius: 8, padding: "6px 10px", fontSize: 18, cursor: "pointer", color: "white",
+    display: "flex", alignItems: "center",
+  },
+  campanaBadge: {
+    position: "absolute", top: -6, right: -6,
+    background: "#e74c3c", color: "white", fontSize: 10, fontWeight: 800,
+    borderRadius: "50%", width: 18, height: 18,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    border: "2px solid #1a1a2e",
+  },
+  campanaPanel: {
+    position: "absolute", top: "calc(100% + 8px)", right: 0,
+    width: 310, maxHeight: 400, background: "white",
+    borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+    zIndex: 1000, overflow: "hidden",
+    border: "1px solid #e8eaf6",
+  },
+  campanaPanelHeader: {
+    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#f8f9ff",
+  },
+  campanaSinAvisos: {
+    padding: 20, textAlign: "center", color: "#aaa", fontSize: 13,
+  },
+  campanaLista: {
+    overflowY: "auto", maxHeight: 350,
+  },
+  campanaItem: {
+    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
   },
   tabs: {
     display: "flex", background: "white",
@@ -704,7 +836,7 @@ const styles = {
   tab: {
     padding: "12px 14px", border: "none", background: "transparent",
     fontSize: 13, color: "#666", borderBottom: "3px solid transparent",
-    marginBottom: -2, whiteSpace: "nowrap",
+    marginBottom: -2, whiteSpace: "nowrap", cursor: "pointer",
   },
   tabActivo: { color: "#1a1a2e", fontWeight: 700, borderBottom: "3px solid #1a1a2e" },
   tabAlerta: { color: "#3f51b5", fontWeight: 700 },
@@ -722,18 +854,18 @@ const styles = {
   opciones: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 },
   opcion: {
     padding: "12px 16px", borderRadius: 8, border: "2px solid #ddd",
-    background: "white", fontSize: 15, textAlign: "left", color: "#333",
+    background: "white", fontSize: 15, textAlign: "left", color: "#333", cursor: "pointer",
   },
   opcionActiva: {
     border: "2px solid #1a1a2e", background: "#f0f2f5", fontWeight: 600, color: "#1a1a2e",
   },
   boton: {
     background: "#1a1a2e", color: "white", border: "none",
-    padding: "12px 24px", borderRadius: 8, fontSize: 15, fontWeight: 600, width: "100%",
+    padding: "12px 24px", borderRadius: 8, fontSize: 15, fontWeight: 600, width: "100%", cursor: "pointer",
   },
   botonCancelar: {
     background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
-    padding: "10px 20px", borderRadius: 8, fontSize: 14, marginTop: 12,
+    padding: "10px 20px", borderRadius: 8, fontSize: 14, marginTop: 12, cursor: "pointer",
   },
   inscriptoBox: {
     background: "#eafaf1", border: "1px solid #27ae60", borderRadius: 8, padding: 16, marginBottom: 12,

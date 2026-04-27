@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db, authSecundaria } from "../firebase";
 import {
@@ -8,7 +8,7 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
-import { suscribirNotificaciones } from "../utils/notificaciones";
+import { enviarAviso, marcarLeido, suscribirAvisos } from "../utils/avisos";
 
 const ESPECIALIDADES = ["MONTAJE", "AVIONICA", "MOTORES", "RADIO", "SCO"];
 
@@ -50,6 +50,14 @@ export default function Admin() {
   const [ratioPropio, setRatioPropio] = useState(null);
   const [editandoEsp, setEditandoEsp] = useState(null);
 
+  // Notificaciones
+  const [notificaciones, setNotificaciones] = useState([]);
+  const [campanaAbierta, setCampanaAbierta] = useState(false);
+  const [textoAviso, setTextoAviso] = useState("");
+  const [enviandoAviso, setEnviandoAviso] = useState(false);
+  const [mensajeAviso, setMensajeAviso] = useState("");
+  const campanaRef = useRef(null);
+
   const user = auth.currentUser;
   const ahora = new Date();
   const mes = ahora.getMonth() + 1;
@@ -59,10 +67,24 @@ export default function Admin() {
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
 
+  // Notificaciones no leídas
+  const noLeidas = notificaciones.filter(n => !n.leidoPor?.includes(user?.uid));
+
   useEffect(() => {
     const handleResize = () => setMobile(window.innerWidth < 640);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Cerrar campanita al hacer click afuera
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (campanaRef.current && !campanaRef.current.contains(e.target)) {
+        setCampanaAbierta(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   useEffect(() => {
@@ -71,7 +93,12 @@ export default function Admin() {
     cargarInscripciones();
     cargarEmpleadoActual();
     cargarSolicitudes();
-    if (user) suscribirNotificaciones(user.uid);
+
+    // Suscripción en tiempo real a notificaciones
+    if (user) {
+      const unsub = suscribirAvisos(user.uid, setNotificaciones);
+      return () => unsub();
+    }
   }, []);
 
   useEffect(() => {
@@ -175,7 +202,6 @@ export default function Admin() {
     const mapaEmp = {};
     empleados.forEach(e => { mapaEmp[e.id] = e; });
 
-    // Construir mapa de asistencias confirmadas por empleado y día
     const asistenciasMap = {};
     snapAsis.docs.forEach(d => {
       const data = d.data();
@@ -185,7 +211,6 @@ export default function Admin() {
       }
     });
 
-    // Agrupar asignaciones por mes/año
     const porMes = {};
     snapAsig.docs.forEach(d => {
       const data = d.data();
@@ -194,7 +219,6 @@ export default function Admin() {
       porMes[key].docs.push(data);
     });
 
-    // Construir lista de meses ordenados de más reciente a más antiguo
     const meses = Object.values(porMes).sort((a, b) => {
       if (a.anio !== b.anio) return b.anio - a.anio;
       return b.mes - a.mes;
@@ -209,9 +233,7 @@ export default function Admin() {
           .filter(d => d.quincena === quincena)
           .map(d => {
             const emp = mapaEmp[d.empleadoId];
-            // Contar días asignados originalmente (estado original, no cambios)
             const diasOriginales = d.dias.length;
-            // Contar cuántos de esos días fueron confirmados en asistencia
             const confirmados = d.dias.filter(dia => {
               const fechaDia = new Date(dia.fecha);
               const diaNum = fechaDia.getDate();
@@ -220,7 +242,6 @@ export default function Admin() {
               const diaKey = `${anioNum}-${mesNum}-${diaNum}`;
               return asistenciasMap[d.empleadoId]?.has(diaKey);
             }).length;
-            // Solo mostrar confirmados si el mes ya pasó
             const mesYaPaso = a < anio || (a === anio && m < mes);
             return {
               nombre: emp ? `${emp.apellido}, ${emp.nombre}` : d.empleadoId,
@@ -501,6 +522,40 @@ export default function Admin() {
     setLoadingPass(false);
   };
 
+  // Enviar aviso a todos
+  const handleEnviarAviso = async () => {
+    if (!textoAviso.trim()) return;
+    setEnviandoAviso(true);
+    setMensajeAviso("");
+    try {
+      await enviarAviso(textoAviso.trim(), user.uid);
+      setTextoAviso("");
+      setMensajeAviso("✓ Aviso enviado a todos los usuarios");
+      setTimeout(() => setMensajeAviso(""), 3000);
+    } catch (err) {
+      setMensajeAviso("Error al enviar: " + err.message);
+    }
+    setEnviandoAviso(false);
+  };
+
+  // Abrir campanita y marcar no leídas como leídas
+  const handleAbrirCampana = async () => {
+    setCampanaAbierta(prev => !prev);
+    // Marcar todas las no leídas
+    if (!campanaAbierta && user) {
+      const sinLeer = notificaciones.filter(n => !n.leidoPor?.includes(user.uid));
+      for (const n of sinLeer) {
+        await marcarLeido(n.id, user.uid);
+      }
+    }
+  };
+
+  const formatFecha = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }) +
+      " " + d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  };
+
   const labelPreferencia = (p) => {
     if (p === "q1") return "1ra quincena";
     if (p === "q2") return "2da quincena";
@@ -563,7 +618,6 @@ export default function Admin() {
             <div style={styles.resumenDias}>
               {emp.detalle.map((d, j) => {
                 const color = COLORES_TURNO[d.turno] || { bg: "#f5f5f5", text: "#333" };
-                // Verificar si este día ya pasó
                 const fechaDia = new Date(d.fecha);
                 const yaOcurrio = fechaDia < ahora;
                 return (
@@ -721,9 +775,57 @@ export default function Admin() {
 
       <div style={styles.header}>
         <h1 style={styles.title}>solAPPe {mobile ? "" : "— Admin"}</h1>
-        <button style={styles.logout} onClick={() => signOut(auth)}>
-          {mobile ? "Salir" : "Cerrar sesión"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Campanita */}
+          <div ref={campanaRef} style={{ position: "relative" }}>
+            <button
+              style={styles.campanaBtn}
+              onClick={handleAbrirCampana}
+              title="Avisos"
+            >
+              🔔
+              {noLeidas.length > 0 && (
+                <span style={styles.campanaBadge}>{noLeidas.length}</span>
+              )}
+            </button>
+
+            {campanaAbierta && (
+              <div style={styles.campanaPanel}>
+                <div style={styles.campanaPanelHeader}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>🔔 Avisos</span>
+                  <span style={{ fontSize: 12, color: "#999" }}>{notificaciones.length} total</span>
+                </div>
+                {notificaciones.length === 0 ? (
+                  <div style={styles.campanaSinAvisos}>Sin avisos enviados aún</div>
+                ) : (
+                  <div style={styles.campanaLista}>
+                    {notificaciones.map(n => {
+                      const leido = n.leidoPor?.includes(user?.uid);
+                      return (
+                        <div key={n.id} style={{
+                          ...styles.campanaItem,
+                          background: leido ? "white" : "#f0f4ff",
+                          borderLeft: leido ? "3px solid #eee" : "3px solid #3f51b5",
+                        }}>
+                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>
+                            {n.mensaje}
+                          </p>
+                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>
+                            {formatFecha(n.creadoEn)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <button style={styles.logout} onClick={() => signOut(auth)}>
+            {mobile ? "Salir" : "Cerrar sesión"}
+          </button>
+        </div>
       </div>
 
       <div style={styles.tabs}>
@@ -793,6 +895,75 @@ export default function Admin() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* ── SECCIÓN AVISOS ── */}
+            <div style={styles.card}>
+              <h2 style={styles.cardTitle}>📢 Enviar aviso a todos</h2>
+              <p style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
+                El aviso le llega como notificación a todos los usuarios de la app (empleados y admins).
+              </p>
+              <textarea
+                style={{
+                  ...styles.input,
+                  minHeight: 80,
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                  lineHeight: 1.5,
+                }}
+                placeholder="Escribí el aviso acá..."
+                value={textoAviso}
+                onChange={e => setTextoAviso(e.target.value)}
+                maxLength={500}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                <span style={{ fontSize: 12, color: "#aaa" }}>{textoAviso.length}/500 caracteres</span>
+                {mensajeAviso && (
+                  <span style={{ fontSize: 13, color: mensajeAviso.startsWith("✓") ? "#27ae60" : "#e74c3c", fontWeight: 600 }}>
+                    {mensajeAviso}
+                  </span>
+                )}
+              </div>
+              <button
+                style={{ ...styles.boton, background: "#3f51b5", marginTop: 12, width: mobile ? "100%" : "auto" }}
+                onClick={handleEnviarAviso}
+                disabled={enviandoAviso || !textoAviso.trim()}
+              >
+                {enviandoAviso ? "Enviando..." : "📢 Enviar aviso"}
+              </button>
+
+              {/* Historial de avisos enviados */}
+              {notificaciones.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
+                    Avisos enviados ({notificaciones.length})
+                  </h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {notificaciones.map(n => {
+                      const admin = mapaEmpleados[n.creadoPor];
+                      const leidos = n.leidoPor?.length || 0;
+                      return (
+                        <div key={n.id} style={styles.avisoItem}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, flex: 1, lineHeight: 1.5 }}>
+                              {n.mensaje}
+                            </p>
+                            <span style={{
+                              fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 6,
+                              background: "#e8eaf6", color: "#3f51b5", whiteSpace: "nowrap",
+                            }}>
+                              {leidos} leído{leidos !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+                            {admin ? `${admin.apellido}, ${admin.nombre}` : "Admin"} · {formatFecha(n.creadoEn)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -879,12 +1050,10 @@ export default function Admin() {
         {seccion === "resumen" && (
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>📊 Resumen de distribuciones</h2>
-
             {resumenMeses.length === 0 ? (
               <div style={styles.aviso}>No hay distribuciones generadas todavía.</div>
             ) : (
               <>
-                {/* Selector de mes */}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
                   {resumenMeses.map(m => (
                     <button
@@ -904,17 +1073,14 @@ export default function Admin() {
                     </button>
                   ))}
                 </div>
-
                 {mesSeleccionado && (
                   <>
-                    {/* Aclaración */}
                     <div style={{ fontSize: 12, color: "#999", marginBottom: 12, fontStyle: "italic" }}>
                       {mesSeleccionado.esFuturo
                         ? "Distribución generada para el próximo mes. Los días no han ocurrido aún."
-                        : "Distribución original tal como fue lanzada. Los días tachados ya ocurrieron. Los números muestran asistencias confirmadas sobre días asignados."
+                        : "Distribución original tal como fue lanzada. Los días tachados ya ocurrieron."
                       }
                     </div>
-
                     {mesSeleccionado.q1.length === 0 && mesSeleccionado.q2.length === 0 ? (
                       <div style={styles.aviso}>Sin datos para este mes.</div>
                     ) : (
@@ -1098,10 +1264,11 @@ export default function Admin() {
         )}
 
         {seccion === "wordle" && (
-  <div style={styles.card}>
-    <Wordle />
-  </div>
-)}
+          <div style={styles.card}>
+            <Wordle />
+          </div>
+        )}
+
         {seccion === "cuenta" && (
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>🔑 Mi cuenta</h2>
@@ -1151,7 +1318,7 @@ export default function Admin() {
 const styles = {
   container: { minHeight: "100vh", background: "#f0f2f5" },
   banner: {
-    background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283593",
+    background: "#e8f4fd", border: "1px solid #3f51b5", color: "#283293",
     padding: "12px 16px", textAlign: "center", fontSize: 14, fontWeight: 600, cursor: "pointer",
   },
   header: {
@@ -1161,7 +1328,46 @@ const styles = {
   title: { fontSize: 20, fontWeight: 800 },
   logout: {
     background: "transparent", border: "1px solid white", color: "white",
-    padding: "6px 12px", borderRadius: 8, fontSize: 13,
+    padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+  },
+  // Campanita
+  campanaBtn: {
+    position: "relative", background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.4)",
+    borderRadius: 8, padding: "6px 10px", fontSize: 18, cursor: "pointer", color: "white",
+    display: "flex", alignItems: "center",
+  },
+  campanaBadge: {
+    position: "absolute", top: -6, right: -6,
+    background: "#f39c12", color: "white", fontSize: 10, fontWeight: 800,
+    borderRadius: "50%", width: 18, height: 18,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    border: "2px solid #c0392b",
+  },
+  campanaPanel: {
+    position: "absolute", top: "calc(100% + 8px)", right: 0,
+    width: 320, maxHeight: 420, background: "white",
+    borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+    zIndex: 1000, overflow: "hidden",
+    border: "1px solid #e8eaf6",
+  },
+  campanaPanelHeader: {
+    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#f8f9ff",
+  },
+  campanaSinAvisos: {
+    padding: 20, textAlign: "center", color: "#aaa", fontSize: 13,
+  },
+  campanaLista: {
+    overflowY: "auto", maxHeight: 360,
+  },
+  campanaItem: {
+    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
+  },
+  // Avisos en panel admin
+  avisoItem: {
+    background: "#f8f9ff", border: "1px solid #e8eaf6", borderRadius: 8,
+    padding: "10px 14px",
   },
   tabs: {
     display: "flex", background: "white",
@@ -1170,7 +1376,7 @@ const styles = {
   tab: {
     padding: "12px 14px", border: "none", background: "transparent",
     fontSize: 13, color: "#666", borderBottom: "3px solid transparent",
-    marginBottom: -2, whiteSpace: "nowrap",
+    marginBottom: -2, whiteSpace: "nowrap", cursor: "pointer",
   },
   tabActivo: { color: "#c0392b", fontWeight: 700, borderBottom: "3px solid #c0392b" },
   tabAlerta: { color: "#3f51b5", fontWeight: 700 },
@@ -1188,15 +1394,15 @@ const styles = {
   },
   boton: {
     background: "#c0392b", color: "white", border: "none",
-    padding: "12px 24px", borderRadius: 8, fontSize: 15, fontWeight: 600,
+    padding: "12px 24px", borderRadius: 8, fontSize: 15, fontWeight: 600, cursor: "pointer",
   },
   botonSecundario: {
     background: "#1a1a2e", color: "white", border: "none",
-    padding: "6px 12px", borderRadius: 6, fontSize: 13,
+    padding: "6px 12px", borderRadius: 6, fontSize: 13, cursor: "pointer",
   },
   botonEliminar: {
     background: "#e74c3c", color: "white", border: "none",
-    padding: "6px 12px", borderRadius: 6, fontSize: 13,
+    padding: "6px 12px", borderRadius: 6, fontSize: 13, cursor: "pointer",
   },
   botonVerMas: {
     width: "100%", marginTop: 10, padding: "8px", borderRadius: 8,
@@ -1271,4 +1477,4 @@ const styles = {
   },
   ratioTitulo: { fontSize: 14, fontWeight: 600, color: "#1a1a2e" },
   ratioNumero: { fontSize: 15, fontWeight: 700 },
-};  
+};
