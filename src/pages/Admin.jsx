@@ -209,12 +209,11 @@ export default function Admin() {
     // Agrupar por mes/año usando respondidoEn
     const porMes = {};
     todas.forEach(s => {
-      const fecha = new Date(s.respondidoEn);
-      const a = fecha.getFullYear();
-      const m = fecha.getMonth() + 1;
+      const a = s.anioOrigen || new Date(s.respondidoEn).getFullYear();
+      const m = s.mesOrigen || (new Date(s.respondidoEn).getMonth() + 1);
       const key = `${a}-${m}`;
       if (!porMes[key]) {
-        const label = fecha.toLocaleString("es-AR", { month: "long", year: "numeric" });
+        const label = new Date(a, m - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
         porMes[key] = { key, label, anio: a, mes: m, items: [] };
       }
       porMes[key].items.push(s);
@@ -602,8 +601,14 @@ export default function Admin() {
   }, [seccion]);
 
   const handleGuardarCoordinador = async () => {
-    if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
-    if (tipoCoord === "admin" && !adminCoordSel) { setMensajeCoord("Seleccioná un admin"); return; }
+  if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
+  if (tipoCoord === "admin" && !adminCoordSel) { setMensajeCoord("Seleccioná un admin"); return; }
+  // Verificar que no sea día franco
+  const fechaVerif = new Date(coordAnio, coordMes - 1, parseInt(diaCoordSel));
+  if (getTurnoParaDia(fechaVerif) === "franco") {
+    setMensajeCoord("⚠️ Los días franco no requieren coordinador");
+    return;
+  }
     setGuardandoCoord(true);
     setMensajeCoord("");
     try {

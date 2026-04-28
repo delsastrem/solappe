@@ -134,12 +134,11 @@ export default function Dashboard() {
     // Agrupar por mes/año usando respondidoEn
     const porMes = {};
     lista.forEach(s => {
-      const fecha = new Date(s.respondidoEn);
-      const a = fecha.getFullYear();
-      const m = fecha.getMonth() + 1;
+      const a = s.anioOrigen || new Date(s.respondidoEn).getFullYear();
+      const m = s.mesOrigen || (new Date(s.respondidoEn).getMonth() + 1);
       const key = `${a}-${m}`;
       if (!porMes[key]) {
-        const label = fecha.toLocaleString("es-AR", { month: "long", year: "numeric" });
+        const label = new Date(a, m - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
         porMes[key] = { key, label, anio: a, mes: m, items: [] };
       }
       porMes[key].items.push(s);
@@ -315,17 +314,17 @@ export default function Dashboard() {
     if (dias.length === 0) { alert("No tenés días asignados para exportar."); return; }
     const turnoHoras = {
       mañana: { inicio: "070000", fin: "150000" },
-      tarde:  { inicio: "150000", fin: "230000" },
-      noche:  { inicio: "230000", fin: "070000" },
+      tarde: { inicio: "150000", fin: "230000" },
+      noche: { inicio: "230000", fin: "070000" },
     };
     const formatFechaICS = (isoStr, horaStr) => {
       const f = new Date(isoStr);
-      return `${f.getFullYear()}${String(f.getMonth()+1).padStart(2,"0")}${String(f.getDate()).padStart(2,"0")}T${horaStr}`;
+      return `${f.getFullYear()}${String(f.getMonth() + 1).padStart(2, "0")}${String(f.getDate()).padStart(2, "0")}T${horaStr}`;
     };
     const formatFechaSiguiente = (isoStr, horaStr) => {
       const f = new Date(isoStr);
       f.setDate(f.getDate() + 1);
-      return `${f.getFullYear()}${String(f.getMonth()+1).padStart(2,"0")}${String(f.getDate()).padStart(2,"0")}T${horaStr}`;
+      return `${f.getFullYear()}${String(f.getMonth() + 1).padStart(2, "0")}${String(f.getDate()).padStart(2, "0")}T${horaStr}`;
     };
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//solAPPe//ES\r\nCALSCALE:GREGORIAN\r\n";
     dias.forEach((d, i) => {
@@ -363,8 +362,8 @@ export default function Dashboard() {
 
   const COLORES_TURNO = {
     mañana: { bg: "#fff8e1", text: "#856404" },
-    tarde:  { bg: "#e8f5e9", text: "#1e8449" },
-    noche:  { bg: "#e8eaf6", text: "#283593" },
+    tarde: { bg: "#e8f5e9", text: "#1e8449" },
+    noche: { bg: "#e8eaf6", text: "#283593" },
   };
 
   const renderColumnaResumen = (lista, titulo) => (
@@ -796,13 +795,13 @@ export default function Dashboard() {
 
                       {mesHistorialActual.items.length > 5 &&
                         mesHistorialActual.items.length <= (visiblesPorMes[mesHistorialActual.key] || 5) && (
-                        <button
-                          style={styles.botonVerMas}
-                          onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesHistorialActual.key]: 5 }))}
-                        >
-                          ▲ Ver menos
-                        </button>
-                      )}
+                          <button
+                            style={styles.botonVerMas}
+                            onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesHistorialActual.key]: 5 }))}
+                          >
+                            ▲ Ver menos
+                          </button>
+                        )}
                     </>
                   )}
                 </>
@@ -832,8 +831,8 @@ export default function Dashboard() {
                   ...styles.ratioNumero,
                   color: ratioPropio.asignados === 0 ? "#999"
                     : ratioPropio.confirmados === ratioPropio.asignados ? "#27ae60"
-                    : ratioPropio.confirmados === 0 ? "#e74c3c"
-                    : "#f39c12",
+                      : ratioPropio.confirmados === 0 ? "#e74c3c"
+                        : "#f39c12",
                 }}>
                   {ratioPropio.confirmados} confirmadas / {ratioPropio.asignados} asignadas
                 </span>
