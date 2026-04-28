@@ -1183,7 +1183,7 @@ export default function Admin() {
                       return (
                         <div key={r.docId} style={{ ...styles.asistenciaFila, background: "#e8f4fd", border: "1px solid #3f51b5" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <span style={{ fontSize: 20 }}>🔄</span>
+                            <span style={{ fontSize: 20 }}>🎣</span>
                             <div>
                               <div style={{ fontWeight: 600, fontSize: 14, color: "#1a1a2e" }}>
                                 {emp ? `${emp.apellido}, ${emp.nombre}` : r.empleadoId}

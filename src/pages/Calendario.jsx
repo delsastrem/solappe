@@ -316,7 +316,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
                 const emp = empleados[r.empleadoId];
                 return (
                   <span key={`r${i}`} style={{ ...styles.chipEmpleado, ...styles.chipReemplazante }}>
-                    🔄 {emp ? emp.apellido.substring(0, 6) : "..."}
+                    🎣 {emp ? emp.apellido.substring(0, 6) : "..."}
                   </span>
                 );
               })}
@@ -367,7 +367,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
                   const emp = empleados[r.empleadoId];
                   return (
                     <span key={`r${i}`} style={{ ...styles.chipEmpleado, ...styles.chipReemplazante, fontSize: 13 }}>
-                      🔄 {emp ? `${emp.apellido}, ${emp.nombre}` : "..."}
+                      🎣 {emp ? `${emp.apellido}, ${emp.nombre}` : "..."}
                     </span>
                   );
                 })}
@@ -518,7 +518,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
         </div>
         <div style={styles.leyendaItem}>
           <div style={{ width: 10, height: 10, borderRadius: 3, background: "#3f51b5" }} />
-          <span style={{ fontSize: 12, color: "#555" }}>🔄 Reemplazante</span>
+          <span style={{ fontSize: 12, color: "#555" }}> 🎣 Reemplazante</span>
         </div>
         <div style={styles.leyendaItem}>
           <span style={{ fontSize: 12, color: "#856404" }}>⚠️ Cambio pendiente</span>
