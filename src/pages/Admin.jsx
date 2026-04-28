@@ -601,14 +601,14 @@ export default function Admin() {
   }, [seccion]);
 
   const handleGuardarCoordinador = async () => {
-  if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
-  if (tipoCoord === "admin" && !adminCoordSel) { setMensajeCoord("Seleccioná un admin"); return; }
-  // Verificar que no sea día franco
-  const fechaVerif = new Date(coordAnio, coordMes - 1, parseInt(diaCoordSel));
-  if (getTurnoParaDia(fechaVerif) === "franco") {
-    setMensajeCoord("⚠️ Los días franco no requieren coordinador");
-    return;
-  }
+    if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
+    if (tipoCoord === "admin" && !adminCoordSel) { setMensajeCoord("Seleccioná un admin"); return; }
+    // Verificar que no sea día franco
+    const fechaVerif = new Date(coordAnio, coordMes - 1, parseInt(diaCoordSel));
+    if (getTurnoParaDia(fechaVerif) === "franco") {
+      setMensajeCoord("⚠️ Los días franco no requieren coordinador");
+      return;
+    }
     setGuardandoCoord(true);
     setMensajeCoord("");
     try {
@@ -1632,26 +1632,28 @@ export default function Admin() {
                             }}>
                               ⭐ {labelCoord}
                             </span>
-                          ) : (
+                          ) : turnoDelDia !== "franco" ? (
                             <span style={{ fontSize: 12, color: "#f39c12", fontWeight: 600 }}>
-                              ⚠️ Sin asignar
+                              Sin asignar
                             </span>
-                          )}
+                          ) : null}
                         </div>
 
-                        <button
-                          style={{
-                            fontSize: 12, padding: "4px 10px", borderRadius: 6,
-                            background: "transparent", border: "1px solid #ddd",
-                            color: "#666", cursor: "pointer",
-                          }}
-                          onClick={() => {
-                            setDiaCoordSel(String(d));
-                            window.scrollTo({ top: 0, behavior: "smooth" });
-                          }}
-                        >
-                          {coord ? "Cambiar" : "Asignar"}
-                        </button>
+                        {(coord || turnoDelDia !== "franco") && (
+                          <button
+                            style={{
+                              fontSize: 12, padding: "4px 10px", borderRadius: 6,
+                              background: "transparent", border: "1px solid #ddd",
+                              color: "#666", cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              setDiaCoordSel(String(d));
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                            }}
+                          >
+                            {coord ? "Cambiar" : "Asignar"}
+                          </button>
+                        )}
 
                         {coord && (
                           <button
