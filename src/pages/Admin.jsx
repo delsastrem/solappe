@@ -62,6 +62,8 @@ export default function Admin() {
   const [adminCoordSel, setAdminCoordSel] = useState("");
   const [espCoordSel, setEspCoordSel] = useState("MONTAJE");
   const [diaCoordSel, setDiaCoordSel] = useState("");
+  const [guardandoCoord, setGuardandoCoord] = useState(false);
+  const [mensajeCoord, setMensajeCoord] = useState("");
   const [coordinadoresAsistencia, setCoordinadoresAsistencia] = useState({});
 
   // Notificaciones
@@ -675,6 +677,7 @@ export default function Admin() {
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
     if (s === "coordinadores") return "⭐ Coordinadores";
+    if (s === "wordle") return "🎮 Wordle";
     return "🔑 Mi cuenta";
   };
 
