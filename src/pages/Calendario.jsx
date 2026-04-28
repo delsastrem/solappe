@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { db, auth } from "../firebase";
 import { collection, getDocs, addDoc } from "firebase/firestore";
 import { getTurnoParaDia } from "../utils/distribucion";
+import { getCoordinadoresMes } from "../utils/coordinadores";
 import html2canvas from "html2canvas";
 
 const COLORES_TURNO = {
@@ -11,12 +12,15 @@ const COLORES_TURNO = {
   franco: { bg: "#f5f5f5", border: "#ccc",    texto: "#999",    label: "Franco" },
 };
 
+const LABEL_ESP = { MONTAJE: "Montaje", MOTORES: "Motores", AVIONICA: "Avionica" };
+
 const isMobile = () => window.innerWidth < 640;
 
 export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitudesPendientes = [] }) {
   const [asignaciones, setAsignaciones] = useState([]);
   const [empleados, setEmpleados] = useState({});
   const [asistencias, setAsistencias] = useState({});
+  const [coordinadores, setCoordinadores] = useState({});
   const [vista, setVista] = useState(isMobile() ? "lista" : "calendario");
   const [mobile, setMobile] = useState(isMobile());
   const [descargando, setDescargando] = useState(false);
@@ -50,6 +54,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
   useEffect(() => {
     cargarAsignaciones();
     cargarAsistencias();
+    cargarCoordinadores();
   }, [mes, anio]);
 
   useEffect(() => {
@@ -79,6 +84,11 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     const mapa = {};
     snap.docs.forEach(d => { mapa[d.id] = d.data(); });
     setAsistencias(mapa);
+  };
+
+  const cargarCoordinadores = async () => {
+    const mapa = await getCoordinadoresMes(anio, mes);
+    setCoordinadores(mapa);
   };
 
   const estaConfirmado = (dia, empleadoId) => {
@@ -243,6 +253,27 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     setDescargando(false);
   };
 
+  const renderChipCoordinador = (dia, esLista = false) => {
+    const coord = coordinadores[dia];
+    if (!coord) return null;
+    let label = "";
+    if (coord.tipo === "admin") {
+      const emp = empleados[coord.adminId];
+      label = emp ? (esLista ? `${emp.apellido}, ${emp.nombre}` : emp.apellido.substring(0, 8)) : "Admin";
+    } else {
+      label = `Int. ${LABEL_ESP[coord.especialidad] || coord.especialidad}`;
+    }
+    return (
+      <span style={{
+        ...styles.chipEmpleado,
+        ...styles.chipCoordinador,
+        ...(esLista ? { fontSize: 13 } : {}),
+      }}>
+        ⭐ {label}
+      </span>
+    );
+  };
+
   const renderChip = (a, i, dia, esLista = false) => {
     const emp = empleados[a.empleadoId];
     const esMio = user && a.empleadoId === user.uid && !esAdmin;
@@ -292,6 +323,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
       const esHoy = dia === ahora.getDate() && mes === ahora.getMonth() + 1 && anio === ahora.getFullYear();
       const reemplazantes = getReemplazantes(dia);
       const hayConfirmados = asignados.some(a => estaConfirmado(dia, a.empleadoId)) || reemplazantes.length > 0;
+      const chipCoord = renderChipCoordinador(dia, false);
 
       celdas.push(
         <div key={dia} style={{
@@ -306,7 +338,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
               {turno !== "franco" ? turno : "F"}
             </span>
           </div>
-          {(asignados.length > 0 || reemplazantes.length > 0) && (
+          {(asignados.length > 0 || reemplazantes.length > 0 || chipCoord) && (
             <div style={styles.asignadosList}>
               {asignados
                 .sort((a, b) => a.turno.localeCompare(b.turno))
@@ -320,6 +352,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
                   </span>
                 );
               })}
+              {chipCoord}
             </div>
           )}
         </div>
@@ -333,7 +366,8 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     for (let dia = 1; dia <= diasDelMes; dia++) {
       const { turno, asignados } = getDiaInfo(dia);
       const reemplazantes = getReemplazantes(dia);
-      if (asignados.length === 0 && reemplazantes.length === 0 && turno === "franco") continue;
+      const chipCoord = renderChipCoordinador(dia, true);
+      if (asignados.length === 0 && reemplazantes.length === 0 && !chipCoord && turno === "franco") continue;
       const color = COLORES_TURNO[turno];
       const fecha = new Date(anio, mes - 1, dia);
       const nombreDia = fecha.toLocaleString("es-AR", { weekday: "short" });
@@ -355,7 +389,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
             </div>
           </div>
           <div style={styles.listaEmpleados}>
-            {asignados.length === 0 && reemplazantes.length === 0 ? (
+            {asignados.length === 0 && reemplazantes.length === 0 && !chipCoord ? (
               <span style={{ color: "#999", fontSize: 13 }}>Sin asignados</span>
             ) : (
               <>
@@ -371,6 +405,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
                     </span>
                   );
                 })}
+                {chipCoord}
               </>
             )}
           </div>
@@ -390,7 +425,6 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
             <span style={styles.modalLabel}>Tu día:</span>
             <span style={styles.modalValor}>{modalCambio.labelOrigen} — {modalCambio.turnoOrigen}</span>
           </div>
-
           {paso === 1 && (
             <>
               <p style={styles.modalSubtitulo}>¿Con quién querés cambiar?</p>
@@ -411,7 +445,6 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
               )}
             </>
           )}
-
           {paso === 2 && (
             <>
               <p style={styles.modalSubtitulo}>
@@ -452,14 +485,12 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
               </div>
             </>
           )}
-
           {paso === 3 && (
             <div style={styles.modalExito}>
               <p style={{ color: "#27ae60", fontWeight: 600, fontSize: 15 }}>{mensajeCambio}</p>
               <button style={styles.modalBotonEnviar} onClick={cerrarModal}>Cerrar</button>
             </div>
           )}
-
           {paso !== 3 && (
             <button style={styles.modalCerrar} onClick={cerrarModal}>✕</button>
           )}
@@ -471,13 +502,11 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
   return (
     <div style={styles.container}>
       {renderModal()}
-
       <div style={styles.navMes}>
         <button style={styles.navBtn} onClick={() => cambiarMes(-1)}>◀</button>
         <h2 style={styles.navTitulo}>{nombreMes}</h2>
         <button style={styles.navBtn} onClick={() => cambiarMes(1)}>▶</button>
       </div>
-
       <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         {!mobile && (
           ["calendario", "lista"].map(v => (
@@ -498,13 +527,11 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
           {descargando ? "Generando..." : "⬇️ Descargar imagen"}
         </button>
       </div>
-
       {!esAdmin && (
         <div style={styles.avisocambio}>
           🔄 Tocá tu nombre en el calendario para solicitar un cambio de día
         </div>
       )}
-
       <div style={styles.leyenda}>
         {Object.entries(COLORES_TURNO).filter(([k]) => k !== "franco").map(([k, v]) => (
           <div key={k} style={styles.leyendaItem}>
@@ -518,13 +545,16 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
         </div>
         <div style={styles.leyendaItem}>
           <div style={{ width: 10, height: 10, borderRadius: 3, background: "#3f51b5" }} />
-          <span style={{ fontSize: 12, color: "#555" }}> 🎣 Reemplazante</span>
+          <span style={{ fontSize: 12, color: "#555" }}>🎣 Reemplazante</span>
+        </div>
+        <div style={styles.leyendaItem}>
+          <div style={{ width: 10, height: 10, borderRadius: 3, background: "#880e4f" }} />
+          <span style={{ fontSize: 12, color: "#555" }}>⭐ Coordinador</span>
         </div>
         <div style={styles.leyendaItem}>
           <span style={{ fontSize: 12, color: "#856404" }}>⚠️ Cambio pendiente</span>
         </div>
       </div>
-
       <div ref={calendarioRef}>
         {vista === "calendario" && !mobile ? (
           <div style={styles.grid}>
@@ -546,103 +576,43 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
 const styles = {
   container: { padding: "16px 12px", maxWidth: 1000, margin: "0 auto", boxSizing: "border-box", width: "100%" },
   navMes: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 16 },
-  navBtn: {
-    background: "#1a1a2e", color: "white", border: "none",
-    borderRadius: 8, padding: "8px 14px", fontSize: 16, cursor: "pointer",
-  },
-  navTitulo: {
-    fontSize: 18, fontWeight: 700, color: "#1a1a2e",
-    textTransform: "capitalize", minWidth: 160, textAlign: "center",
-  },
-  toggleBtn: {
-    padding: "8px 20px", borderRadius: 8, border: "1px solid #ddd",
-    background: "white", fontSize: 14, color: "#666", cursor: "pointer",
-  },
+  navBtn: { background: "#1a1a2e", color: "white", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 16, cursor: "pointer" },
+  navTitulo: { fontSize: 18, fontWeight: 700, color: "#1a1a2e", textTransform: "capitalize", minWidth: 160, textAlign: "center" },
+  toggleBtn: { padding: "8px 20px", borderRadius: 8, border: "1px solid #ddd", background: "white", fontSize: 14, color: "#666", cursor: "pointer" },
   toggleActivo: { background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e", fontWeight: 600 },
-  avisocambio: {
-    background: "#e8eaf6", border: "1px solid #3f51b5", borderRadius: 8,
-    padding: "8px 14px", fontSize: 13, color: "#283593",
-    textAlign: "center", marginBottom: 12,
-  },
+  avisocambio: { background: "#e8eaf6", border: "1px solid #3f51b5", borderRadius: 8, padding: "8px 14px", fontSize: 13, color: "#283593", textAlign: "center", marginBottom: 12 },
   leyenda: { display: "flex", gap: 12, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" },
   leyendaItem: { display: "flex", alignItems: "center", gap: 5 },
   grid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 },
   headerDia: { textAlign: "center", fontWeight: 700, fontSize: 12, color: "#666", padding: "6px 0" },
-  celda: {
-    borderRadius: 6, padding: 4, minHeight: 70,
-    display: "flex", flexDirection: "column", gap: 3,
-  },
+  celda: { borderRadius: 6, padding: 4, minHeight: 70, display: "flex", flexDirection: "column", gap: 3 },
   celdaHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" },
   asignadosList: { display: "flex", flexDirection: "column", gap: 2 },
-  chipEmpleado: {
-    background: "rgba(0,0,0,0.08)", borderRadius: 4,
-    padding: "1px 4px", fontSize: 10, color: "#333",
-    display: "inline-block",
-  },
+  chipEmpleado: { background: "rgba(0,0,0,0.08)", borderRadius: 4, padding: "1px 4px", fontSize: 10, color: "#333", display: "inline-block" },
   chipMio: { background: "#1a1a2e", color: "white", fontWeight: 600 },
-  chipConfirmado: {
-    background: "#d4edda", color: "#1e8449", fontWeight: 600,
-    border: "1px solid #27ae60",
-  },
-  chipPendiente: {
-    background: "#fef3cd", color: "#856404", fontWeight: 600,
-    border: "1px solid #f39c12",
-  },
-  chipReemplazante: {
-    background: "#cce5ff", color: "#004085", fontWeight: 600,
-    border: "1px solid #3f51b5",
-  },
+  chipConfirmado: { background: "#d4edda", color: "#1e8449", fontWeight: 600, border: "1px solid #27ae60" },
+  chipPendiente: { background: "#fef3cd", color: "#856404", fontWeight: 600, border: "1px solid #f39c12" },
+  chipReemplazante: { background: "#cce5ff", color: "#004085", fontWeight: 600, border: "1px solid #3f51b5" },
+  chipCoordinador: { background: "#fce4ec", color: "#880e4f", fontWeight: 600, border: "1px solid #e91e63" },
   listaContainer: { display: "flex", flexDirection: "column", gap: 8 },
-  listaFila: {
-    background: "white", borderRadius: 8, padding: "10px 12px",
-    display: "flex", alignItems: "center", gap: 12,
-    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-  },
+  listaFila: { background: "white", borderRadius: 8, padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" },
   listaFecha: { display: "flex", alignItems: "center", gap: 8, minWidth: 110 },
   listaDia: { fontSize: 20, fontWeight: 800, color: "#1a1a2e", minWidth: 28 },
   listaNombreDia: { fontSize: 12, color: "#555", textTransform: "capitalize" },
   listaTurno: { fontSize: 11, fontWeight: 600, padding: "2px 6px", borderRadius: 6, marginTop: 2 },
   listaEmpleados: { display: "flex", flexWrap: "wrap", gap: 5, flex: 1 },
-  modalOverlay: {
-    position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-    background: "rgba(0,0,0,0.5)", zIndex: 1000,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    padding: 16,
-  },
-  modal: {
-    background: "white", borderRadius: 16, padding: 24,
-    width: "100%", maxWidth: 420, position: "relative",
-    maxHeight: "80vh", overflowY: "auto",
-  },
+  modalOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
+  modal: { background: "white", borderRadius: 16, padding: 24, width: "100%", maxWidth: 420, position: "relative", maxHeight: "80vh", overflowY: "auto" },
   modalTitulo: { fontSize: 18, fontWeight: 800, color: "#1a1a2e", marginBottom: 16 },
-  modalInfo: {
-    background: "#f0f2f5", borderRadius: 8, padding: "10px 14px",
-    marginBottom: 16, display: "flex", gap: 8, alignItems: "center",
-  },
+  modalInfo: { background: "#f0f2f5", borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", gap: 8, alignItems: "center" },
   modalLabel: { fontSize: 13, color: "#666", fontWeight: 600 },
   modalValor: { fontSize: 14, color: "#1a1a2e", fontWeight: 700 },
   modalSubtitulo: { fontWeight: 600, color: "#333", marginBottom: 10, fontSize: 14 },
   modalLista: { display: "flex", flexDirection: "column", gap: 8 },
-  modalOpcion: {
-    padding: "10px 14px", borderRadius: 8, border: "1px solid #ddd",
-    background: "white", fontSize: 14, textAlign: "left", color: "#333", cursor: "pointer",
-  },
-  modalOpcionActiva: {
-    background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e", fontWeight: 600,
-  },
-  modalBotonVolver: {
-    padding: "10px 16px", borderRadius: 8, border: "1px solid #ddd",
-    background: "white", fontSize: 14, color: "#666", cursor: "pointer",
-  },
-  modalBotonEnviar: {
-    padding: "10px 20px", borderRadius: 8, border: "none",
-    background: "#1a1a2e", color: "white", fontSize: 14,
-    fontWeight: 600, cursor: "pointer", flex: 1,
-  },
+  modalOpcion: { padding: "10px 14px", borderRadius: 8, border: "1px solid #ddd", background: "white", fontSize: 14, textAlign: "left", color: "#333", cursor: "pointer" },
+  modalOpcionActiva: { background: "#1a1a2e", color: "white", border: "1px solid #1a1a2e", fontWeight: 600 },
+  modalBotonVolver: { padding: "10px 16px", borderRadius: 8, border: "1px solid #ddd", background: "white", fontSize: 14, color: "#666", cursor: "pointer" },
+  modalBotonEnviar: { padding: "10px 20px", borderRadius: 8, border: "none", background: "#1a1a2e", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", flex: 1 },
   modalExito: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center", padding: "8px 0" },
-  modalCerrar: {
-    position: "absolute", top: 12, right: 12,
-    background: "transparent", border: "none",
-    fontSize: 18, color: "#999", cursor: "pointer",
-  },
+  modalCerrar: { position: "absolute", top: 12, right: 12, background: "transparent", border: "none", fontSize: 18, color: "#999", cursor: "pointer" },
 };

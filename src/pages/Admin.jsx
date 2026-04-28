@@ -9,6 +9,7 @@ import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
 import { enviarAviso, marcarLeido, suscribirAvisos } from "../utils/avisos";
+import { guardarCoordinador, quitarCoordinador, getCoordinadoresMes, getResumenCoordinadores } from "../utils/coordinadores";
 
 const ESPECIALIDADES = ["MONTAJE", "AVIONICA", "MOTORES", "RADIO", "SCO"];
 
@@ -51,6 +52,17 @@ export default function Admin() {
   const [ratios, setRatios] = useState({});
   const [ratioPropio, setRatioPropio] = useState(null);
   const [editandoEsp, setEditandoEsp] = useState(null);
+
+  // Coordinadores
+  const [coordMes, setCoordMes] = useState(ahora.getMonth() + 1);
+  const [coordAnio, setCoordAnio] = useState(ahora.getFullYear());
+  const [coordinadoresMes, setCoordinadoresMes] = useState({});
+  const [resumenCoord, setResumenCoord] = useState({});
+  const [tipoCoord, setTipoCoord] = useState("admin");
+  const [adminCoordSel, setAdminCoordSel] = useState("");
+  const [espCoordSel, setEspCoordSel] = useState("MONTAJE");
+  const [diaCoordSel, setDiaCoordSel] = useState("");
+  const [coordinadoresAsistencia, setCoordinadoresAsistencia] = useState({});
 
   // Notificaciones
   const [notificaciones, setNotificaciones] = useState([]);
@@ -102,9 +114,9 @@ export default function Admin() {
   useEffect(() => {
     if (seccion === "resumen") cargarResumen();
     if (seccion === "cambios") cargarCambios();
-    if (seccion === "asistencia") cargarAsistencia();
+    if (seccion === "asistencia") { cargarAsistencia(); cargarCoordinadoresMes(); }
     if (seccion === "empleados") cargarRatios();
-    if (seccion === "cuenta") cargarRatioPropio();
+    if (seccion === "coordinadores") { cargarCoordinadoresMes(); cargarResumenCoord(); }
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -328,6 +340,12 @@ export default function Admin() {
     const mapaAsis = {};
     snapAsis.docs.forEach(d => { mapaAsis[d.id] = d.data(); });
     setAsistencias(mapaAsis);
+
+    // Cargar coordinadores del mes actual para la sección asistencia
+    const mesActual = ahora.getMonth() + 1;
+    const anioActual = ahora.getFullYear();
+    const mapaCoord = await getCoordinadoresMes(anioActual, mesActual);
+    setCoordinadoresAsistencia(mapaCoord);
   };
 
   const toggleConfirmado = async (diaKey, empleadoId) => {
@@ -550,6 +568,58 @@ export default function Admin() {
     setLoadingPass(false);
   };
 
+  const cargarCoordinadoresMes = async () => {
+    const mapa = await getCoordinadoresMes(coordAnio, coordMes);
+    setCoordinadoresMes(mapa);
+  };
+
+  const cargarResumenCoord = async () => {
+    const conteo = await getResumenCoordinadores();
+    setResumenCoord(conteo);
+  };
+
+  const cambiarMesCoord = (delta) => {
+    let m = coordMes + delta;
+    let a = coordAnio;
+    if (m > 12) { m = 1; a++; }
+    if (m < 1)  { m = 12; a--; }
+    setCoordMes(m);
+    setCoordAnio(a);
+  };
+
+  // Recargar cuando cambia el mes del coordinador
+  useEffect(() => {
+    if (seccion === "coordinadores") cargarCoordinadoresMes();
+  }, [coordMes, coordAnio]);
+
+  const handleGuardarCoordinador = async () => {
+    if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
+    if (tipoCoord === "admin" && !adminCoordSel) { setMensajeCoord("Seleccioná un admin"); return; }
+    setGuardandoCoord(true);
+    setMensajeCoord("");
+    try {
+      const datos = tipoCoord === "admin"
+        ? { tipo: "admin", adminId: adminCoordSel }
+        : { tipo: "interino", especialidad: espCoordSel };
+      await guardarCoordinador(coordAnio, coordMes, parseInt(diaCoordSel), datos);
+      setMensajeCoord("✓ Coordinador guardado");
+      setDiaCoordSel("");
+      setAdminCoordSel("");
+      cargarCoordinadoresMes();
+      cargarResumenCoord();
+      setTimeout(() => setMensajeCoord(""), 2500);
+    } catch (err) {
+      setMensajeCoord("Error: " + err.message);
+    }
+    setGuardandoCoord(false);
+  };
+
+  const handleQuitarCoordinador = async (dia) => {
+    await quitarCoordinador(coordAnio, coordMes, dia);
+    cargarCoordinadoresMes();
+    cargarResumenCoord();
+  };
+
   const handleEnviarAviso = async () => {
     if (!textoAviso.trim()) return;
     setEnviandoAviso(true);
@@ -597,7 +667,7 @@ export default function Admin() {
     if (s === "cambios") return solicitudesPendientes.length > 0
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
-    if (s === "wordle") return "🎮 Wordle";
+    if (s === "coordinadores") return "⭐ Coordinadores";
     return "🔑 Mi cuenta";
   };
 
@@ -841,7 +911,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados","inscripciones","resumen","calendario","asistencia","cambios","wordle","cuenta"].map(s => (
+        {["empleados","inscripciones","resumen","calendario","asistencia","coordinadores","cambios","wordle","cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -1123,6 +1193,62 @@ export default function Admin() {
             </div>
             {diaActual && (
               <>
+                {/* Coordinador del día */}
+                {(() => {
+                  if (!diaActual) return null;
+                  const coord = coordinadoresAsistencia[diaActual.diaNum];
+                  if (!coord) return null;
+
+                  const LABEL_ESP2 = { MONTAJE: "Montaje", MOTORES: "Motores", AVIONICA: "Avionica" };
+                  let labelCoord2 = "";
+                  let empCoord = null;
+                  if (coord.tipo === "admin") {
+                    empCoord = mapaEmpleados[coord.adminId];
+                    labelCoord2 = empCoord ? `${empCoord.apellido}, ${empCoord.nombre}` : "Admin";
+                  } else {
+                    labelCoord2 = `Interino — ${LABEL_ESP2[coord.especialidad] || coord.especialidad}`;
+                  }
+
+                  // Solo mostrar checkbox de confirmación para coordinadores de tipo admin
+                  const docIdCoord = coord.tipo === "admin" && coord.adminId
+                    ? `${diaActual.key}_${coord.adminId}`
+                    : null;
+                  const confirmadoCoord = docIdCoord ? asistencias[docIdCoord]?.confirmado : false;
+
+                  return (
+                    <div style={{ marginBottom: 20 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
+                        ⭐ Coordinador del día
+                      </h3>
+                      <div style={{
+                        ...styles.asistenciaFila,
+                        background: confirmadoCoord ? "#fce4ec" : "white",
+                        border: `1px solid ${confirmadoCoord ? "#e91e63" : "#e8eaf6"}`,
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 20 }}>{coord.tipo === "admin" ? (confirmadoCoord ? "✅" : "⬜") : "⭐"}</span>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 14, color: "#880e4f" }}>
+                              {labelCoord2}
+                            </div>
+                            <span style={{ fontSize: 11, color: "#e91e63" }}>
+                              {coord.tipo === "admin" ? "Coordinador" : "Interino (sin confirmación)"}
+                            </span>
+                          </div>
+                        </div>
+                        {coord.tipo === "admin" && docIdCoord && (
+                          <button
+                            style={{ ...styles.botonSecundario, background: confirmadoCoord ? "#e74c3c" : "#880e4f" }}
+                            onClick={() => toggleConfirmado(diaActual.key, coord.adminId)}
+                          >
+                            {confirmadoCoord ? "Quitar" : "Confirmar"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", margin: "16px 0 10px" }}>
                   Asignados para el {diaActual.label}
                 </h3>
@@ -1320,6 +1446,232 @@ export default function Admin() {
             </div>
           </>
         )}
+
+        {seccion === "coordinadores" && (() => {
+          const diasDelMes = new Date(coordAnio, coordMes, 0).getDate();
+          const nombreMesCoord = new Date(coordAnio, coordMes - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
+          const admins = empleados.filter(e => e.esAdmin);
+          const ahora2 = new Date();
+          const hoy = { d: ahora2.getDate(), m: ahora2.getMonth() + 1, a: ahora2.getFullYear() };
+          const LABEL_ESP = { MONTAJE: "Montaje", MOTORES: "Motores", AVIONICA: "Avionica" };
+
+          // Generar todos los días del mes para mostrar estado completo
+          const todosDias = [];
+          for (let d = 1; d <= diasDelMes; d++) {
+            todosDias.push(d);
+          }
+
+          const esPasado = (d) => {
+            if (coordAnio < hoy.a) return true;
+            if (coordAnio === hoy.a && coordMes < hoy.m) return true;
+            if (coordAnio === hoy.a && coordMes === hoy.m && d < hoy.d) return true;
+            return false;
+          };
+          const esHoy = (d) => coordAnio === hoy.a && coordMes === hoy.m && d === hoy.d;
+
+          return (
+            <>
+              {/* Formulario de carga */}
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>⭐ Coordinador del día</h2>
+                <p style={{ fontSize: 13, color: "#666", marginBottom: 14 }}>
+                  Cada día de solape requiere un coordinador. Podés asignar un admin por nombre o registrar un interino por especialidad.
+                </p>
+
+                {/* Selector de mes */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                  <button style={{ ...styles.botonSecundario, padding: "6px 12px" }} onClick={() => cambiarMesCoord(-1)}>◀</button>
+                  <span style={{ fontWeight: 700, fontSize: 15, textTransform: "capitalize", minWidth: 160, textAlign: "center" }}>
+                    {nombreMesCoord}
+                  </span>
+                  <button style={{ ...styles.botonSecundario, padding: "6px 12px" }} onClick={() => cambiarMesCoord(1)}>▶</button>
+                </div>
+
+                {/* Formulario */}
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 90 }}>
+                    <label style={{ fontSize: 12, color: "#666" }}>Día</label>
+                    <select style={{ ...styles.input, width: 90 }} value={diaCoordSel} onChange={e => setDiaCoordSel(e.target.value)}>
+                      <option value="">Día</option>
+                      {todosDias.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 140 }}>
+                    <label style={{ fontSize: 12, color: "#666" }}>Tipo</label>
+                    <select style={{ ...styles.input, width: 140 }} value={tipoCoord} onChange={e => setTipoCoord(e.target.value)}>
+                      <option value="admin">Admin por nombre</option>
+                      <option value="interino">Interino (especialidad)</option>
+                    </select>
+                  </div>
+
+                  {tipoCoord === "admin" ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 180 }}>
+                      <label style={{ fontSize: 12, color: "#666" }}>Admin</label>
+                      <select style={styles.input} value={adminCoordSel} onChange={e => setAdminCoordSel(e.target.value)}>
+                        <option value="">Seleccioná admin...</option>
+                        {admins.map(e => (
+                          <option key={e.id} value={e.id}>{e.apellido}, {e.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 180 }}>
+                      <label style={{ fontSize: 12, color: "#666" }}>Especialidad del interino</label>
+                      <select style={styles.input} value={espCoordSel} onChange={e => setEspCoordSel(e.target.value)}>
+                        <option value="MONTAJE">MONTAJE</option>
+                        <option value="MOTORES">MOTORES</option>
+                        <option value="AVIONICA">AVIONICA</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <button
+                    style={{ ...styles.boton, background: "#880e4f", width: mobile ? "100%" : "auto" }}
+                    onClick={handleGuardarCoordinador}
+                    disabled={guardandoCoord}
+                  >
+                    {guardandoCoord ? "Guardando..." : "Asignar"}
+                  </button>
+                </div>
+
+                {mensajeCoord && (
+                  <p style={{ color: mensajeCoord.startsWith("✓") ? "#27ae60" : "#e74c3c", fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
+                    {mensajeCoord}
+                  </p>
+                )}
+              </div>
+
+              {/* Lista del mes completo */}
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>
+                  Días del mes
+                  <span style={{ fontSize: 12, fontWeight: 400, color: "#999", marginLeft: 8 }}>
+                    {Object.keys(coordinadoresMes).length}/{diasDelMes} asignados
+                  </span>
+                </h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {todosDias.map(d => {
+                    const coord = coordinadoresMes[d];
+                    const fecha = new Date(coordAnio, coordMes - 1, d);
+                    const nombreDia = fecha.toLocaleString("es-AR", { weekday: "short" });
+                    const pasado = esPasado(d);
+                    const hoyFlag = esHoy(d);
+
+                    let labelCoord = null;
+                    if (coord) {
+                      if (coord.tipo === "admin") {
+                        const emp = mapaEmpleados[coord.adminId];
+                        labelCoord = emp ? `${emp.apellido}, ${emp.nombre}` : "Admin";
+                      } else {
+                        labelCoord = `Interino — ${LABEL_ESP[coord.especialidad] || coord.especialidad}`;
+                      }
+                    }
+
+                    return (
+                      <div key={d} style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "8px 12px", borderRadius: 8,
+                        background: hoyFlag ? "#fdf2f2" : coord ? "white" : "#fef9e7",
+                        border: `1px solid ${hoyFlag ? "#c0392b" : coord ? "#eee" : "#f39c12"}`,
+                        opacity: pasado ? 0.6 : 1,
+                      }}>
+                        <div style={{ minWidth: 80, display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{
+                            fontWeight: 700, fontSize: 14,
+                            color: pasado ? "#aaa" : hoyFlag ? "#c0392b" : "#1a1a2e",
+                            textDecoration: pasado ? "line-through" : "none",
+                          }}>
+                            {d}
+                          </span>
+                          <span style={{ fontSize: 12, color: "#aaa", textTransform: "capitalize" }}>{nombreDia}</span>
+                          {hoyFlag && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 700 }}>Hoy</span>}
+                        </div>
+
+                        <div style={{ flex: 1 }}>
+                          {coord ? (
+                            <span style={{
+                              fontSize: 13, fontWeight: 600,
+                              color: coord.tipo === "admin" ? "#880e4f" : "#e65100",
+                              background: coord.tipo === "admin" ? "#fce4ec" : "#fff3e0",
+                              padding: "2px 10px", borderRadius: 6,
+                              border: `1px solid ${coord.tipo === "admin" ? "#e91e63" : "#ff9800"}`,
+                            }}>
+                              ⭐ {labelCoord}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 12, color: "#f39c12", fontWeight: 600 }}>
+                              ⚠️ Sin asignar
+                            </span>
+                          )}
+                        </div>
+
+                        <button
+                          style={{
+                            fontSize: 12, padding: "4px 10px", borderRadius: 6,
+                            background: "transparent", border: "1px solid #ddd",
+                            color: "#666", cursor: "pointer",
+                          }}
+                          onClick={() => {
+                            setDiaCoordSel(String(d));
+                            window.scrollTo({ top: 0, behavior: "smooth" });
+                          }}
+                        >
+                          {coord ? "Cambiar" : "Asignar"}
+                        </button>
+
+                        {coord && (
+                          <button
+                            style={{ ...styles.botonEliminar, fontSize: 12, padding: "4px 10px" }}
+                            onClick={() => handleQuitarCoordinador(d)}
+                          >
+                            Quitar
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Resumen del mes — solo admins, solo para admins */}
+              {Object.keys(resumenCoord).length > 0 && (
+                <div style={styles.card}>
+                  <h2 style={styles.cardTitle}>📊 Resumen acumulado de coordinaciones</h2>
+                  <p style={{ fontSize: 12, color: "#999", marginBottom: 12, fontStyle: "italic" }}>
+                    Total histórico de días coordinados por cada admin.
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {Object.entries(resumenCoord)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([uid, count]) => {
+                        const emp = mapaEmpleados[uid];
+                        if (!emp) return null;
+                        const max = Math.max(...Object.values(resumenCoord));
+                        const pct = max > 0 ? Math.round((count / max) * 100) : 0;
+                        return (
+                          <div key={uid} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e", minWidth: 160 }}>
+                              {emp.apellido}, {emp.nombre}
+                            </span>
+                            <div style={{ flex: 1, height: 8, background: "#f0f2f5", borderRadius: 4, overflow: "hidden" }}>
+                              <div style={{ width: `${pct}%`, height: "100%", background: "#880e4f", borderRadius: 4 }} />
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: "#880e4f", minWidth: 40, textAlign: "right" }}>
+                              {count} días
+                            </span>
+                          </div>
+                        );
+                      })
+                    }
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {seccion === "wordle" && (
           <div style={styles.card}>
