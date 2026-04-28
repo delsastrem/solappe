@@ -54,8 +54,8 @@ export default function Admin() {
   const [editandoEsp, setEditandoEsp] = useState(null);
 
   // Coordinadores
-  const [coordMes, setCoordMes] = useState(ahora.getMonth() + 1);
-  const [coordAnio, setCoordAnio] = useState(ahora.getFullYear());
+  const [coordMes, setCoordMes] = useState(new Date().getMonth() + 1);
+  const [coordAnio, setCoordAnio] = useState(new Date().getFullYear());
   const [coordinadoresMes, setCoordinadoresMes] = useState({});
   const [resumenCoord, setResumenCoord] = useState({});
   const [tipoCoord, setTipoCoord] = useState("admin");
