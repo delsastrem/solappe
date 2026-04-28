@@ -114,9 +114,9 @@ export default function Admin() {
   useEffect(() => {
     if (seccion === "resumen") cargarResumen();
     if (seccion === "cambios") cargarCambios();
-    if (seccion === "asistencia") { cargarAsistencia(); cargarCoordinadoresMes(); }
+    if (seccion === "asistencia") cargarAsistencia();
     if (seccion === "empleados") cargarRatios();
-    if (seccion === "coordinadores") { cargarCoordinadoresMes(); cargarResumenCoord(); }
+    if (seccion === "cuenta") cargarRatioPropio();
   }, [seccion, empleados]);
 
   const cargarEmpleadoActual = async () => {
@@ -341,11 +341,7 @@ export default function Admin() {
     snapAsis.docs.forEach(d => { mapaAsis[d.id] = d.data(); });
     setAsistencias(mapaAsis);
 
-    // Cargar coordinadores del mes actual para la sección asistencia
-    const mesActual = ahora.getMonth() + 1;
-    const anioActual = ahora.getFullYear();
-    const mapaCoord = await getCoordinadoresMes(anioActual, mesActual);
-    setCoordinadoresAsistencia(mapaCoord);
+    
   };
 
   const toggleConfirmado = async (diaKey, empleadoId) => {
@@ -573,6 +569,13 @@ export default function Admin() {
     setCoordinadoresMes(mapa);
   };
 
+  const cargarCoordinadoresAsistencia = async () => {
+    const mesActual = ahora.getMonth() + 1;
+    const anioActual = ahora.getFullYear();
+    const mapa = await getCoordinadoresMes(anioActual, mesActual);
+    setCoordinadoresAsistencia(mapa);
+  };
+
   const cargarResumenCoord = async () => {
     const conteo = await getResumenCoordinadores();
     setResumenCoord(conteo);
@@ -591,6 +594,10 @@ export default function Admin() {
   useEffect(() => {
     if (seccion === "coordinadores") cargarCoordinadoresMes();
   }, [coordMes, coordAnio]);
+  useEffect(() => {
+    if (seccion === "coordinadores") { cargarCoordinadoresMes(); cargarResumenCoord(); }
+    if (seccion === "asistencia") cargarCoordinadoresAsistencia();
+  }, [seccion]);
 
   const handleGuardarCoordinador = async () => {
     if (!diaCoordSel) { setMensajeCoord("Seleccioná un día"); return; }
