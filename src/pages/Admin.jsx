@@ -39,8 +39,10 @@ export default function Admin() {
   const [resumenMeses, setResumenMeses] = useState([]);
   const [mesResumenSeleccionado, setMesResumenSeleccionado] = useState(null);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
-  const [historialCambios, setHistorialCambios] = useState([]);
-  const [historialExpandido, setHistorialExpandido] = useState(false);
+  // Cambios agrupados por mes
+  const [cambiosPorMes, setCambiosPorMes] = useState([]);
+  const [mesCambioSeleccionado, setMesCambioSeleccionado] = useState(null);
+  const [visiblesPorMes, setVisiblesPorMes] = useState({});
   const [procesando, setProcesando] = useState(null);
   const [diasAsistencia, setDiasAsistencia] = useState([]);
   const [asistencias, setAsistencias] = useState({});
@@ -67,7 +69,6 @@ export default function Admin() {
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
 
-  // Notificaciones no leídas
   const noLeidas = notificaciones.filter(n => !n.leidoPor?.includes(user?.uid));
 
   useEffect(() => {
@@ -76,7 +77,6 @@ export default function Admin() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Cerrar campanita al hacer click afuera
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (campanaRef.current && !campanaRef.current.contains(e.target)) {
@@ -93,8 +93,6 @@ export default function Admin() {
     cargarInscripciones();
     cargarEmpleadoActual();
     cargarSolicitudes();
-
-    // Suscripción en tiempo real a notificaciones
     if (user) {
       const unsub = suscribirAvisos(user.uid, setNotificaciones);
       return () => unsub();
@@ -103,7 +101,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (seccion === "resumen") cargarResumen();
-    if (seccion === "cambios") cargarHistorial();
+    if (seccion === "cambios") cargarCambios();
     if (seccion === "asistencia") cargarAsistencia();
     if (seccion === "empleados") cargarRatios();
     if (seccion === "cuenta") cargarRatioPropio();
@@ -186,14 +184,44 @@ export default function Admin() {
     setSolicitudesPendientes(todas.filter(s => s.receptorId === user.uid && s.estado === "pendiente"));
   };
 
-  const cargarHistorial = async () => {
+  // Cargar historial agrupado por mes
+  const cargarCambios = async () => {
     const snap = await getDocs(collection(db, "solicitudesCambio"));
     const todas = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(s => s.estado !== "pendiente")
       .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn));
-    setHistorialCambios(todas);
-    setHistorialExpandido(false);
+
+    // Agrupar por mes/año usando respondidoEn
+    const porMes = {};
+    todas.forEach(s => {
+      const fecha = new Date(s.respondidoEn);
+      const a = fecha.getFullYear();
+      const m = fecha.getMonth() + 1;
+      const key = `${a}-${m}`;
+      if (!porMes[key]) {
+        const label = fecha.toLocaleString("es-AR", { month: "long", year: "numeric" });
+        porMes[key] = { key, label, anio: a, mes: m, items: [] };
+      }
+      porMes[key].items.push(s);
+    });
+
+    const meses = Object.values(porMes).sort((a, b) => {
+      if (a.anio !== b.anio) return b.anio - a.anio;
+      return b.mes - a.mes;
+    });
+
+    setCambiosPorMes(meses);
+
+    // Seleccionar el mes más reciente por defecto
+    if (meses.length > 0) {
+      setMesCambioSeleccionado(prev => prev || meses[0].key);
+    }
+
+    // Inicializar visibles en 5 por mes
+    const init = {};
+    meses.forEach(m => { init[m.key] = 5; });
+    setVisiblesPorMes(init);
   };
 
   const cargarResumen = async () => {
@@ -362,7 +390,7 @@ export default function Admin() {
         respondidoEn: new Date().toISOString(),
       });
       cargarSolicitudes();
-      cargarHistorial();
+      cargarCambios();
     } catch (err) {
       alert("Error: " + err.message);
     }
@@ -522,7 +550,6 @@ export default function Admin() {
     setLoadingPass(false);
   };
 
-  // Enviar aviso a todos
   const handleEnviarAviso = async () => {
     if (!textoAviso.trim()) return;
     setEnviandoAviso(true);
@@ -538,10 +565,8 @@ export default function Admin() {
     setEnviandoAviso(false);
   };
 
-  // Abrir campanita y marcar no leídas como leídas
   const handleAbrirCampana = async () => {
     setCampanaAbierta(prev => !prev);
-    // Marcar todas las no leídas
     if (!campanaAbierta && user) {
       const sinLeer = notificaciones.filter(n => !n.leidoPor?.includes(user.uid));
       for (const n of sinLeer) {
@@ -759,11 +784,9 @@ export default function Admin() {
     );
   };
 
-  const historialVisible = historialExpandido
-    ? historialCambios.slice(0, 10)
-    : historialCambios.slice(0, 5);
-
   const mesSeleccionado = resumenMeses.find(m => m.key === mesResumenSeleccionado);
+  const mesCambioActual = cambiosPorMes.find(m => m.key === mesCambioSeleccionado);
+  const totalCambios = cambiosPorMes.reduce((acc, m) => acc + m.items.length, 0);
 
   return (
     <div style={styles.container}>
@@ -776,19 +799,13 @@ export default function Admin() {
       <div style={styles.header}>
         <h1 style={styles.title}>solAPPe {mobile ? "" : "— Admin"}</h1>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Campanita */}
           <div ref={campanaRef} style={{ position: "relative" }}>
-            <button
-              style={styles.campanaBtn}
-              onClick={handleAbrirCampana}
-              title="Avisos"
-            >
+            <button style={styles.campanaBtn} onClick={handleAbrirCampana} title="Avisos">
               🔔
               {noLeidas.length > 0 && (
                 <span style={styles.campanaBadge}>{noLeidas.length}</span>
               )}
             </button>
-
             {campanaAbierta && (
               <div style={styles.campanaPanel}>
                 <div style={styles.campanaPanelHeader}>
@@ -807,12 +824,8 @@ export default function Admin() {
                           background: leido ? "white" : "#f0f4ff",
                           borderLeft: leido ? "3px solid #eee" : "3px solid #3f51b5",
                         }}>
-                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>
-                            {n.mensaje}
-                          </p>
-                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>
-                            {formatFecha(n.creadoEn)}
-                          </span>
+                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>{n.mensaje}</p>
+                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>{formatFecha(n.creadoEn)}</span>
                         </div>
                       );
                     })}
@@ -821,7 +834,6 @@ export default function Admin() {
               </div>
             )}
           </div>
-
           <button style={styles.logout} onClick={() => signOut(auth)}>
             {mobile ? "Salir" : "Cerrar sesión"}
           </button>
@@ -904,13 +916,7 @@ export default function Admin() {
                 El aviso le llega como notificación a todos los usuarios de la app (empleados y admins).
               </p>
               <textarea
-                style={{
-                  ...styles.input,
-                  minHeight: 80,
-                  resize: "vertical",
-                  fontFamily: "inherit",
-                  lineHeight: 1.5,
-                }}
+                style={{ ...styles.input, minHeight: 80, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
                 placeholder="Escribí el aviso acá..."
                 value={textoAviso}
                 onChange={e => setTextoAviso(e.target.value)}
@@ -931,8 +937,6 @@ export default function Admin() {
               >
                 {enviandoAviso ? "Enviando..." : "📢 Enviar aviso"}
               </button>
-
-              {/* Historial de avisos enviados */}
               {notificaciones.length > 0 && (
                 <div style={{ marginTop: 20 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
@@ -945,13 +949,8 @@ export default function Admin() {
                       return (
                         <div key={n.id} style={styles.avisoItem}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                            <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, flex: 1, lineHeight: 1.5 }}>
-                              {n.mensaje}
-                            </p>
-                            <span style={{
-                              fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 6,
-                              background: "#e8eaf6", color: "#3f51b5", whiteSpace: "nowrap",
-                            }}>
+                            <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, flex: 1, lineHeight: 1.5 }}>{n.mensaje}</p>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: "#e8eaf6", color: "#3f51b5", whiteSpace: "nowrap" }}>
                               {leidos} leído{leidos !== 1 ? "s" : ""}
                             </span>
                           </div>
@@ -1122,7 +1121,6 @@ export default function Admin() {
                 );
               })}
             </div>
-
             {diaActual && (
               <>
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", margin: "16px 0 10px" }}>
@@ -1172,7 +1170,6 @@ export default function Admin() {
                     })}
                   </div>
                 )}
-
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>
                   Reemplazantes / adicionales
                 </h3>
@@ -1199,7 +1196,6 @@ export default function Admin() {
                     })}
                   </div>
                 )}
-
                 <div style={{ ...styles.grid, gridTemplateColumns: mobile ? "1fr" : "2fr 1fr", gap: 8 }}>
                   <select
                     style={styles.input}
@@ -1228,6 +1224,7 @@ export default function Admin() {
 
         {seccion === "cambios" && (
           <>
+            {/* Solicitudes pendientes propias */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>🔄 Mis solicitudes pendientes</h2>
               {solicitudesPendientes.length === 0 ? (
@@ -1238,24 +1235,85 @@ export default function Admin() {
                 </div>
               )}
             </div>
+
+            {/* Historial agrupado por mes */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>
                 📋 Historial de cambios
                 <span style={{ fontSize: 12, fontWeight: 400, color: "#999", marginLeft: 8 }}>
-                  ({historialCambios.length} total)
+                  ({totalCambios} total)
                 </span>
               </h2>
-              {historialCambios.length === 0 ? (
+
+              {cambiosPorMes.length === 0 ? (
                 <div style={styles.aviso}>Todavía no hay cambios registrados.</div>
               ) : (
                 <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {historialVisible.map(s => renderSolicitudCard(s, false))}
+                  {/* Solapas de mes */}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                    {cambiosPorMes.map(m => (
+                      <button
+                        key={m.key}
+                        style={{
+                          padding: "6px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                          background: mesCambioSeleccionado === m.key ? "#1a1a2e" : "white",
+                          color: mesCambioSeleccionado === m.key ? "white" : "#666",
+                          border: `1px solid ${mesCambioSeleccionado === m.key ? "#1a1a2e" : "#ddd"}`,
+                          fontWeight: mesCambioSeleccionado === m.key ? 700 : 400,
+                          textTransform: "capitalize",
+                        }}
+                        onClick={() => setMesCambioSeleccionado(m.key)}
+                      >
+                        {m.label}
+                        <span style={{
+                          marginLeft: 6, fontSize: 11, fontWeight: 700,
+                          background: mesCambioSeleccionado === m.key ? "rgba(255,255,255,0.25)" : "#f0f2f5",
+                          color: mesCambioSeleccionado === m.key ? "white" : "#666",
+                          padding: "1px 6px", borderRadius: 8,
+                        }}>
+                          {m.items.length}
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                  {historialCambios.length > 5 && (
-                    <button style={styles.botonVerMas} onClick={() => setHistorialExpandido(!historialExpandido)}>
-                      {historialExpandido ? "▲ Ver menos" : `▼ Ver más (${Math.min(historialCambios.length - 5, 5)} más)`}
-                    </button>
+
+                  {/* Cambios del mes seleccionado */}
+                  {mesCambioActual && (
+                    <>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {mesCambioActual.items
+                          .slice(0, visiblesPorMes[mesCambioActual.key] || 5)
+                          .map(s => renderSolicitudCard(s, false))
+                        }
+                      </div>
+
+                      {/* Botón ver más — carga todos de a 5 hasta mostrar todos */}
+                      {mesCambioActual.items.length > (visiblesPorMes[mesCambioActual.key] || 5) && (
+                        <button
+                          style={styles.botonVerMas}
+                          onClick={() => setVisiblesPorMes(prev => ({
+                            ...prev,
+                            [mesCambioActual.key]: Math.min(
+                              (prev[mesCambioActual.key] || 5) + 5,
+                              mesCambioActual.items.length
+                            ),
+                          }))}
+                        >
+                          ▼ Ver más ({mesCambioActual.items.length - (visiblesPorMes[mesCambioActual.key] || 5)} restantes)
+                        </button>
+                      )}
+
+                      {/* Botón colapsar cuando ya se muestran todos */}
+                      {mesCambioActual.items.length > 5 &&
+                        mesCambioActual.items.length <= (visiblesPorMes[mesCambioActual.key] || 5) && (
+                        <button
+                          style={styles.botonVerMas}
+                          onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesCambioActual.key]: 5 }))}
+                        >
+                          ▲ Ver menos
+                        </button>
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -1330,7 +1388,6 @@ const styles = {
     background: "transparent", border: "1px solid white", color: "white",
     padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer",
   },
-  // Campanita
   campanaBtn: {
     position: "relative", background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.4)",
     borderRadius: 8, padding: "6px 10px", fontSize: 18, cursor: "pointer", color: "white",
@@ -1347,27 +1404,18 @@ const styles = {
     position: "absolute", top: "calc(100% + 8px)", right: 0,
     width: 320, maxHeight: 420, background: "white",
     borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-    zIndex: 1000, overflow: "hidden",
-    border: "1px solid #e8eaf6",
+    zIndex: 1000, overflow: "hidden", border: "1px solid #e8eaf6",
   },
   campanaPanelHeader: {
     padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
     display: "flex", justifyContent: "space-between", alignItems: "center",
     background: "#f8f9ff",
   },
-  campanaSinAvisos: {
-    padding: 20, textAlign: "center", color: "#aaa", fontSize: 13,
-  },
-  campanaLista: {
-    overflowY: "auto", maxHeight: 360,
-  },
-  campanaItem: {
-    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
-  },
-  // Avisos en panel admin
+  campanaSinAvisos: { padding: 20, textAlign: "center", color: "#aaa", fontSize: 13 },
+  campanaLista: { overflowY: "auto", maxHeight: 360 },
+  campanaItem: { padding: "12px 14px", borderBottom: "1px solid #f0f2f5" },
   avisoItem: {
-    background: "#f8f9ff", border: "1px solid #e8eaf6", borderRadius: 8,
-    padding: "10px 14px",
+    background: "#f8f9ff", border: "1px solid #e8eaf6", borderRadius: 8, padding: "10px 14px",
   },
   tabs: {
     display: "flex", background: "white",

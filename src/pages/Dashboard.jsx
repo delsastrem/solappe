@@ -22,7 +22,10 @@ export default function Dashboard() {
   const [mobile, setMobile] = useState(window.innerWidth < 640);
   const [solicitudesPendientes, setSolicitudesPendientes] = useState([]);
   const [solicitudesEnviadas, setSolicitudesEnviadas] = useState([]);
-  const [historialPropio, setHistorialPropio] = useState([]);
+  // Historial propio agrupado por mes
+  const [historialPorMes, setHistorialPorMes] = useState([]);
+  const [mesHistorialSeleccionado, setMesHistorialSeleccionado] = useState(null);
+  const [visiblesPorMes, setVisiblesPorMes] = useState({});
   const [empleados, setEmpleados] = useState({});
   const [procesando, setProcesando] = useState(null);
   const [ratioPropio, setRatioPropio] = useState(null);
@@ -44,7 +47,6 @@ export default function Dashboard() {
   const nombreMes = new Date(anioProximo, mesProximo - 1, 1)
     .toLocaleString("es-AR", { month: "long" });
 
-  // Notificaciones no leídas
   const noLeidas = notificaciones.filter(n => !n.leidoPor?.includes(user?.uid));
 
   useEffect(() => {
@@ -53,7 +55,6 @@ export default function Dashboard() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Cerrar campanita al hacer click afuera
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (campanaRef.current && !campanaRef.current.contains(e.target)) {
@@ -71,8 +72,6 @@ export default function Dashboard() {
     cargarRatioPropio();
     cargarHistorialPropio();
     cargarMisAsignaciones();
-
-    // Suscripción en tiempo real a notificaciones
     if (user) {
       const unsub = suscribirAvisos(user.uid, setNotificaciones);
       return () => unsub();
@@ -120,6 +119,7 @@ export default function Dashboard() {
     setSolicitudesEnviadas(todas.filter(s => s.solicitanteId === user.uid && s.estado === "pendiente"));
   };
 
+  // Historial propio agrupado por mes — sin límite
   const cargarHistorialPropio = async () => {
     if (!user) return;
     const snap = await getDocs(collection(db, "solicitudesCambio"));
@@ -129,9 +129,35 @@ export default function Dashboard() {
         s.estado !== "pendiente" &&
         (s.solicitanteId === user.uid || s.receptorId === user.uid)
       )
-      .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn))
-      .slice(0, 10);
-    setHistorialPropio(lista);
+      .sort((a, b) => new Date(b.respondidoEn) - new Date(a.respondidoEn));
+
+    // Agrupar por mes/año usando respondidoEn
+    const porMes = {};
+    lista.forEach(s => {
+      const fecha = new Date(s.respondidoEn);
+      const a = fecha.getFullYear();
+      const m = fecha.getMonth() + 1;
+      const key = `${a}-${m}`;
+      if (!porMes[key]) {
+        const label = fecha.toLocaleString("es-AR", { month: "long", year: "numeric" });
+        porMes[key] = { key, label, anio: a, mes: m, items: [] };
+      }
+      porMes[key].items.push(s);
+    });
+
+    const meses = Object.values(porMes).sort((a, b) => {
+      if (a.anio !== b.anio) return b.anio - a.anio;
+      return b.mes - a.mes;
+    });
+
+    setHistorialPorMes(meses);
+    if (meses.length > 0) {
+      setMesHistorialSeleccionado(prev => prev || meses[0].key);
+    }
+
+    const init = {};
+    meses.forEach(m => { init[m.key] = 5; });
+    setVisiblesPorMes(init);
   };
 
   const cargarRatioPropio = async () => {
@@ -264,7 +290,6 @@ export default function Dashboard() {
     setLoadingPass(false);
   };
 
-  // Abrir campanita y marcar todas como leídas
   const handleAbrirCampana = async () => {
     const abriendo = !campanaAbierta;
     setCampanaAbierta(abriendo);
@@ -419,6 +444,8 @@ export default function Dashboard() {
   };
 
   const mesSeleccionado = resumenMeses.find(m => m.key === mesResumenSeleccionado);
+  const mesHistorialActual = historialPorMes.find(m => m.key === mesHistorialSeleccionado);
+  const totalHistorial = historialPorMes.reduce((acc, m) => acc + m.items.length, 0);
 
   return (
     <div style={styles.container}>
@@ -441,17 +468,12 @@ export default function Dashboard() {
 
           {/* Campanita */}
           <div ref={campanaRef} style={{ position: "relative" }}>
-            <button
-              style={styles.campanaBtn}
-              onClick={handleAbrirCampana}
-              title="Avisos"
-            >
+            <button style={styles.campanaBtn} onClick={handleAbrirCampana} title="Avisos">
               🔔
               {noLeidas.length > 0 && (
                 <span style={styles.campanaBadge}>{noLeidas.length}</span>
               )}
             </button>
-
             {campanaAbierta && (
               <div style={styles.campanaPanel}>
                 <div style={styles.campanaPanelHeader}>
@@ -479,12 +501,8 @@ export default function Dashboard() {
                               NUEVO
                             </span>
                           )}
-                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>
-                            {n.mensaje}
-                          </p>
-                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>
-                            {formatFecha(n.creadoEn)}
-                          </span>
+                          <p style={{ fontSize: 13, color: "#1a1a2e", margin: 0, lineHeight: 1.4 }}>{n.mensaje}</p>
+                          <span style={{ fontSize: 11, color: "#aaa", marginTop: 4, display: "block" }}>{formatFecha(n.creadoEn)}</span>
                         </div>
                       );
                     })}
@@ -524,7 +542,6 @@ export default function Dashboard() {
             {!inscripcionAbierta && !inscripcion && (
               <div style={styles.aviso}>
                 📅 Las inscripciones están cerradas por el momento.
-                Cuando se abra el período vas a poder anotarte acá.
               </div>
             )}
             {inscripcionAbierta && !inscripcion && (
@@ -637,6 +654,7 @@ export default function Dashboard() {
 
         {seccion === "cambios" && (
           <>
+            {/* Solicitudes enviadas en espera */}
             {solicitudesEnviadas.length > 0 && (
               <div style={styles.card}>
                 <h2 style={styles.cardTitle}>⏳ Solicitudes enviadas en espera</h2>
@@ -644,11 +662,7 @@ export default function Dashboard() {
                   {solicitudesEnviadas.map(s => {
                     const receptor = empleados[s.receptorId];
                     return (
-                      <div key={s.id} style={{
-                        ...styles.solicitudCard,
-                        borderLeft: "4px solid #f39c12",
-                        background: "#fffbf0",
-                      }}>
+                      <div key={s.id} style={{ ...styles.solicitudCard, borderLeft: "4px solid #f39c12", background: "#fffbf0" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                           <span style={{ fontSize: 13, color: "#1a1a2e" }}>
                             Esperando respuesta de{" "}
@@ -671,6 +685,7 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* Solicitudes recibidas pendientes */}
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>🔄 Solicitudes recibidas</h2>
               {solicitudesPendientes.length === 0 ? (
@@ -713,14 +728,84 @@ export default function Dashboard() {
               )}
             </div>
 
+            {/* Historial propio agrupado por mes */}
             <div style={styles.card}>
-              <h2 style={styles.cardTitle}>📋 Mis últimos cambios</h2>
-              {historialPropio.length === 0 ? (
+              <h2 style={styles.cardTitle}>
+                📋 Mis cambios
+                <span style={{ fontSize: 12, fontWeight: 400, color: "#999", marginLeft: 8 }}>
+                  ({totalHistorial} total)
+                </span>
+              </h2>
+
+              {historialPorMes.length === 0 ? (
                 <div style={styles.aviso}>No tenés cambios registrados todavía.</div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {historialPropio.map(s => renderHistorialItem(s))}
-                </div>
+                <>
+                  {/* Solapas de mes */}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                    {historialPorMes.map(m => (
+                      <button
+                        key={m.key}
+                        style={{
+                          padding: "6px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                          background: mesHistorialSeleccionado === m.key ? "#1a1a2e" : "white",
+                          color: mesHistorialSeleccionado === m.key ? "white" : "#666",
+                          border: `1px solid ${mesHistorialSeleccionado === m.key ? "#1a1a2e" : "#ddd"}`,
+                          fontWeight: mesHistorialSeleccionado === m.key ? 700 : 400,
+                          textTransform: "capitalize",
+                        }}
+                        onClick={() => setMesHistorialSeleccionado(m.key)}
+                      >
+                        {m.label}
+                        <span style={{
+                          marginLeft: 6, fontSize: 11, fontWeight: 700,
+                          background: mesHistorialSeleccionado === m.key ? "rgba(255,255,255,0.25)" : "#f0f2f5",
+                          color: mesHistorialSeleccionado === m.key ? "white" : "#666",
+                          padding: "1px 6px", borderRadius: 8,
+                        }}>
+                          {m.items.length}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Items del mes seleccionado */}
+                  {mesHistorialActual && (
+                    <>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {mesHistorialActual.items
+                          .slice(0, visiblesPorMes[mesHistorialActual.key] || 5)
+                          .map(s => renderHistorialItem(s))
+                        }
+                      </div>
+
+                      {mesHistorialActual.items.length > (visiblesPorMes[mesHistorialActual.key] || 5) && (
+                        <button
+                          style={styles.botonVerMas}
+                          onClick={() => setVisiblesPorMes(prev => ({
+                            ...prev,
+                            [mesHistorialActual.key]: Math.min(
+                              (prev[mesHistorialActual.key] || 5) + 5,
+                              mesHistorialActual.items.length
+                            ),
+                          }))}
+                        >
+                          ▼ Ver más ({mesHistorialActual.items.length - (visiblesPorMes[mesHistorialActual.key] || 5)} restantes)
+                        </button>
+                      )}
+
+                      {mesHistorialActual.items.length > 5 &&
+                        mesHistorialActual.items.length <= (visiblesPorMes[mesHistorialActual.key] || 5) && (
+                        <button
+                          style={styles.botonVerMas}
+                          onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesHistorialActual.key]: 5 }))}
+                        >
+                          ▲ Ver menos
+                        </button>
+                      )}
+                    </>
+                  )}
+                </>
               )}
             </div>
           </>
@@ -795,7 +880,6 @@ const styles = {
     background: "transparent", border: "1px solid white", color: "white",
     padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer",
   },
-  // Campanita
   campanaBtn: {
     position: "relative", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)",
     borderRadius: 8, padding: "6px 10px", fontSize: 18, cursor: "pointer", color: "white",
@@ -812,23 +896,16 @@ const styles = {
     position: "absolute", top: "calc(100% + 8px)", right: 0,
     width: 310, maxHeight: 400, background: "white",
     borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-    zIndex: 1000, overflow: "hidden",
-    border: "1px solid #e8eaf6",
+    zIndex: 1000, overflow: "hidden", border: "1px solid #e8eaf6",
   },
   campanaPanelHeader: {
     padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
     display: "flex", justifyContent: "space-between", alignItems: "center",
     background: "#f8f9ff",
   },
-  campanaSinAvisos: {
-    padding: 20, textAlign: "center", color: "#aaa", fontSize: 13,
-  },
-  campanaLista: {
-    overflowY: "auto", maxHeight: 350,
-  },
-  campanaItem: {
-    padding: "12px 14px", borderBottom: "1px solid #f0f2f5",
-  },
+  campanaSinAvisos: { padding: 20, textAlign: "center", color: "#aaa", fontSize: 13 },
+  campanaLista: { overflowY: "auto", maxHeight: 350 },
+  campanaItem: { padding: "12px 14px", borderBottom: "1px solid #f0f2f5" },
   tabs: {
     display: "flex", background: "white",
     borderBottom: "2px solid #f0f2f5", padding: "0 8px", overflowX: "auto",
@@ -856,9 +933,7 @@ const styles = {
     padding: "12px 16px", borderRadius: 8, border: "2px solid #ddd",
     background: "white", fontSize: 15, textAlign: "left", color: "#333", cursor: "pointer",
   },
-  opcionActiva: {
-    border: "2px solid #1a1a2e", background: "#f0f2f5", fontWeight: 600, color: "#1a1a2e",
-  },
+  opcionActiva: { border: "2px solid #1a1a2e", background: "#f0f2f5", fontWeight: 600, color: "#1a1a2e" },
   boton: {
     background: "#1a1a2e", color: "white", border: "none",
     padding: "12px 24px", borderRadius: 8, fontSize: 15, fontWeight: 600, width: "100%", cursor: "pointer",
@@ -867,9 +942,12 @@ const styles = {
     background: "transparent", color: "#e74c3c", border: "1px solid #e74c3c",
     padding: "10px 20px", borderRadius: 8, fontSize: 14, marginTop: 12, cursor: "pointer",
   },
-  inscriptoBox: {
-    background: "#eafaf1", border: "1px solid #27ae60", borderRadius: 8, padding: 16, marginBottom: 12,
+  botonVerMas: {
+    width: "100%", marginTop: 10, padding: "8px", borderRadius: 8,
+    border: "1px solid #ddd", background: "white", fontSize: 13,
+    color: "#666", cursor: "pointer",
   },
+  inscriptoBox: { background: "#eafaf1", border: "1px solid #27ae60", borderRadius: 8, padding: 16, marginBottom: 12 },
   inscriptoTexto: { color: "#1e8449", fontWeight: 600, fontSize: 15 },
   inscriptoFecha: { color: "#666", fontSize: 13, marginTop: 4 },
   mensaje: { marginTop: 12, color: "#27ae60", fontWeight: 500 },
