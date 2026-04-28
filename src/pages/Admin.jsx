@@ -5,7 +5,7 @@ import {
   collection, getDocs, deleteDoc, doc, setDoc, getDoc, updateDoc
 } from "firebase/firestore";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { distribuir, distribuirAmbasQuincenas } from "../utils/distribucion";
+import { distribuir, distribuirAmbasQuincenas, getTurnoParaDia } from "../utils/distribucion";
 import Calendario from "./Calendario";
 import Wordle from "./Wordle";
 import { enviarAviso, marcarLeido, suscribirAvisos } from "../utils/avisos";
@@ -343,7 +343,7 @@ export default function Admin() {
     snapAsis.docs.forEach(d => { mapaAsis[d.id] = d.data(); });
     setAsistencias(mapaAsis);
 
-    
+
   };
 
   const toggleConfirmado = async (diaKey, empleadoId) => {
@@ -587,7 +587,7 @@ export default function Admin() {
     let m = coordMes + delta;
     let a = coordAnio;
     if (m > 12) { m = 1; a++; }
-    if (m < 1)  { m = 12; a--; }
+    if (m < 1) { m = 12; a--; }
     setCoordMes(m);
     setCoordAnio(a);
   };
@@ -683,16 +683,16 @@ export default function Admin() {
 
   const COLORES_TURNO = {
     mañana: { bg: "#fff8e1", text: "#856404" },
-    tarde:  { bg: "#e8f5e9", text: "#1e8449" },
-    noche:  { bg: "#e8eaf6", text: "#283593" },
+    tarde: { bg: "#e8f5e9", text: "#1e8449" },
+    noche: { bg: "#e8eaf6", text: "#283593" },
   };
 
   const COLORES_ESP = {
-    MONTAJE:  { bg: "#fce4ec", text: "#880e4f" },
+    MONTAJE: { bg: "#fce4ec", text: "#880e4f" },
     AVIONICA: { bg: "#e8eaf6", text: "#283593" },
-    MOTORES:  { bg: "#fff3e0", text: "#e65100" },
-    RADIO:    { bg: "#e0f2f1", text: "#004d40" },
-    SCO:      { bg: "#f3e5f5", text: "#4a148c" },
+    MOTORES: { bg: "#fff3e0", text: "#e65100" },
+    RADIO: { bg: "#e0f2f1", text: "#004d40" },
+    SCO: { bg: "#f3e5f5", text: "#4a148c" },
   };
 
   const renderColumnaResumen = (lista, titulo, mesYaPaso) => (
@@ -797,8 +797,8 @@ export default function Admin() {
   const diaActual = diasAsistencia.find(d => d.key === diaSeleccionado);
   const reemplazantesDelDia = diaActual
     ? Object.entries(asistencias)
-        .filter(([k, v]) => k.startsWith(diaActual.key) && v.esReemplazante)
-        .map(([k, v]) => ({ docId: k, ...v }))
+      .filter(([k, v]) => k.startsWith(diaActual.key) && v.esReemplazante)
+      .map(([k, v]) => ({ docId: k, ...v }))
     : [];
 
   const renderRatio = (empId) => {
@@ -806,8 +806,8 @@ export default function Admin() {
     if (!r) return null;
     const color = r.asignados === 0 ? "#999"
       : r.confirmados === r.asignados ? "#27ae60"
-      : r.confirmados === 0 ? "#e74c3c"
-      : "#f39c12";
+        : r.confirmados === 0 ? "#e74c3c"
+          : "#f39c12";
     return (
       <span style={{ fontSize: 12, color, fontWeight: 600, marginLeft: 8 }}>
         {r.confirmados}/{r.asignados} asistencias
@@ -921,7 +921,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados","inscripciones","resumen","calendario","asistencia","coordinadores","cambios","wordle","cuenta"].map(s => (
+        {["empleados", "inscripciones", "resumen", "calendario", "asistencia", "coordinadores", "cambios", "wordle", "cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -1442,13 +1442,13 @@ export default function Admin() {
                       {/* Botón colapsar cuando ya se muestran todos */}
                       {mesCambioActual.items.length > 5 &&
                         mesCambioActual.items.length <= (visiblesPorMes[mesCambioActual.key] || 5) && (
-                        <button
-                          style={styles.botonVerMas}
-                          onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesCambioActual.key]: 5 }))}
-                        >
-                          ▲ Ver menos
-                        </button>
-                      )}
+                          <button
+                            style={styles.botonVerMas}
+                            onClick={() => setVisiblesPorMes(prev => ({ ...prev, [mesCambioActual.key]: 5 }))}
+                          >
+                            ▲ Ver menos
+                          </button>
+                        )}
                     </>
                   )}
                 </>
@@ -1567,6 +1567,14 @@ export default function Admin() {
                     const coord = coordinadoresMes[d];
                     const fecha = new Date(coordAnio, coordMes - 1, d);
                     const nombreDia = fecha.toLocaleString("es-AR", { weekday: "short" });
+                    const turnoDelDia = getTurnoParaDia(fecha);
+                    const COLORES_COORD_TURNO = {
+                      mañana: { bg: "#fff8e1", color: "#856404", emoji: "☀️" },
+                      tarde: { bg: "#e8f5e9", color: "#1e8449", emoji: "🌅" },
+                      noche: { bg: "#e8eaf6", color: "#283593", emoji: "🌙" },
+                      franco: { bg: "#f5f5f5", color: "#999", emoji: "—" },
+                    };
+                    const ct = COLORES_COORD_TURNO[turnoDelDia] || COLORES_COORD_TURNO.franco;
                     const pasado = esPasado(d);
                     const hoyFlag = esHoy(d);
 
@@ -1588,7 +1596,7 @@ export default function Admin() {
                         border: `1px solid ${hoyFlag ? "#c0392b" : coord ? "#eee" : "#f39c12"}`,
                         opacity: pasado ? 0.6 : 1,
                       }}>
-                        <div style={{ minWidth: 80, display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ minWidth: 130, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <span style={{
                             fontWeight: 700, fontSize: 14,
                             color: pasado ? "#aaa" : hoyFlag ? "#c0392b" : "#1a1a2e",
@@ -1597,6 +1605,14 @@ export default function Admin() {
                             {d}
                           </span>
                           <span style={{ fontSize: 12, color: "#aaa", textTransform: "capitalize" }}>{nombreDia}</span>
+                          {turnoDelDia !== "franco" && (
+                            <span style={{
+                              fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 5,
+                              background: ct.bg, color: ct.color,
+                            }}>
+                              {ct.emoji} {turnoDelDia}
+                            </span>
+                          )}
                           {hoyFlag && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 700 }}>Hoy</span>}
                         </div>
 
@@ -1704,8 +1720,8 @@ export default function Admin() {
                   ...styles.ratioNumero,
                   color: ratioPropio.asignados === 0 ? "#999"
                     : ratioPropio.confirmados === ratioPropio.asignados ? "#27ae60"
-                    : ratioPropio.confirmados === 0 ? "#e74c3c"
-                    : "#f39c12",
+                      : ratioPropio.confirmados === 0 ? "#e74c3c"
+                        : "#f39c12",
                 }}>
                   {ratioPropio.confirmados} confirmadas / {ratioPropio.asignados} asignadas
                 </span>
