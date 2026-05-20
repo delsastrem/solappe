@@ -1596,6 +1596,7 @@ export default function Admin() {
                     return (
                       <div key={d} style={{
                         display: "flex", alignItems: "center", gap: 10,
+                        flexWrap: "wrap",
                         padding: "8px 12px", borderRadius: 8,
                         background: hoyFlag ? "#fdf2f2" : coord ? "white" : "#fef9e7",
                         border: `1px solid ${hoyFlag ? "#c0392b" : coord ? "#eee" : "#f39c12"}`,

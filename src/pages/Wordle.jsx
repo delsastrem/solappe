@@ -1,16 +1,45 @@
 import { useState, useEffect } from "react";
 import { auth, db } from "../firebase";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
+// Lista ampliada con palabras de los MEL A330 y B737-NG + términos aeronáuticos válidos
 const PALABRAS = [
-  "RADAR","FLAPS","PITCH","STALL","RADIO","PISTA","TOWER","SPEED","CLIMB","GLIDE",
-  "FLARE","BRAKE","BOOST","CARGO","DELTA","OSCAR","ROMEO","TANGO","ULTRA","VAPOR",
-  "KNOTS","LASER","MILLA","NODOS","PULSO","SIGMA","XENON","YAWEO","TIRES","SHOCK",
-  "PROBE","OZONE","NIGHT","MIXER","LEVER","INLET","GAUGE","FENCE","DRAIN","CHORD",
-  "BLADE","HIELO","NIEVE","TURBO","SERVO","AVION","VUELO","MOTOR","VIRAJ",
-  "MORRO","NORTE","GRUES","PAUSA","BALOM","CABLE","HERTZ","IONES","JATOS","RACON",
-  "TENOR","VOLTS","WATTS","WINGS","EXTRA","HATCH","ELBOW","ABAFT","AHEAD","BELOW",
-  "ALTIT","UPPER","RUDDE","GRABA","ENFOK",
+  // Originales válidas
+  "RADAR","FLAPS","PITCH","STALL","RADIO","TOWER","SPEED","CLIMB","GLIDE",
+  "FLARE","BRAKE","CARGO","DELTA","ROMEO","TANGO","VAPOR",
+  "KNOTS","LASER","PROBE","NIGHT","LEVER","INLET","GAUGE","DRAIN","CHORD",
+  "BLADE","TURBO","SERVO","AVION","VUELO","MOTOR",
+  "CABLE","HERTZ","VOLTS","WATTS","WINGS","HATCH",
+  // Desde MEL A330/B737 validadas
+  "ALPHA","BELTS","BLEED","BRACE","FRAME","GEARS","INERT","PEDAL",
+  "PUMPS","SHAFT","SLIDE","SPLIT","SURGE","XWIND","GRAPH","ADAPT",
+  "START","INPUT","TWICE","WHITE","INDEX",
+  // Términos aeronáuticos de 5 letras adicionales
+  "PITOT","SLATS","WHEEL","SEATS","FLARE","VOICE","VIDEO","WATER",
+  "ACARS","LATCH","HINGE","TOUCH","SQUIB","ETOPS",
+  // Inglés aeronáutico jugable
+  "ABORT","ALIGN","AXIAL","BOOST","CABIN","CHECK","CYCLE","DATUM",
+  "DECAL","DEPOT","DITCH","EJECT","EGPWS","ELBOW","ENRTE","ENTER",
+  "EXPEL","FERRY","FINAL","FLAIR","FLANK","FLOOR","FLOUT","FLUSH",
+  "FOILS","FUMES","FUSEL","GLIDE","GLINT","GLOBE","GLOSS","GONZO",
+  "GRIDS","GRIPS","GROSS","GUARD","GYROS","HOLDS","HOVER","HUMID",
+  "HYDRO","IGLOO","IGNIT","INSTR","INTER","IONIC","JOINT","JOULE",
+  "KNEEL","LAPSE","LATCH","LEANS","LIMIT","LINER","LOCAL","LORAN",
+  "MAINS","MASSE","MIXER","MLG","NOZZL","OMEGA","OUTER","OVHD",
+  "OZONE","PANEL","PEDAL","PHASE","PITCH","PIXEL","PLUMB","POLAR",
+  "PROBE","PURGE","RACON","RANGE","RELAY","RESET","RIVET","ROTOR",
+  "ROUTE","RUDDE","SCHED","SEALS","SHEAR","SHIFT","SHOCK","SHORT",
+  "SHUTT","SKEWS","SLIDE","SLIPS","SLOTS","SMOKE","SONIC","SPILL",
+  "SPOKE","SPOOL","SPRAY","STACK","STAGE","STALL","STEER","STERN",
+  "STOPS","STRUT","SURGE","SWEEP","SWEPT","SWIRL","SYNCH","TABLT",
+  "TEMPO","THROT","TILTS","TIMER","TORQU","TOXIC","TRACK","TRANS",
+  "TRIMS","TROPO","TRUNN","TUNER","TURBO","TWIST","ULTRA","UMBIL",
+  "VALVE","VAPOR","VENTS","VERGE","VLOCS","VORTX","WARNS","WASHS",
+  "WEDGE","WEIGH","WIRES","YOKES","ZONES",
+  // Español aeronáutico
+  "HIELO","NIEVE","NORTE","MORRO","PISTA","AVION","VUELO",
+  "MOTOR","TURBO","DELTA","CABLE","SIGMA","ULTRA","VAPOR","NODOS",
+  "MILLA","PULSO","TENOR","HERTZ","IONES","PAUSA","SERVO",
 ].map(p => p.replace(/[^A-Z]/g,'').slice(0,5)).filter(p => p.length === 5);
 
 const PALABRAS_LIMPIAS = [...new Set(PALABRAS)];
@@ -65,7 +94,6 @@ export default function Wordle() {
   }, [tab, juegoTerminado, intentoActual, intentos]);
 
   const iniciar = async () => {
-    // 1. Leer nombre del empleado desde Firestore
     let nombre = "Anónimo";
     if (user) {
       try {
@@ -80,16 +108,40 @@ export default function Wordle() {
     }
     setUserName(nombre);
 
-    // 2. Recuperar estado del día desde localStorage
+    // Recuperar estado del día — tanto partidas terminadas como en curso
     const estadoGuardado = localStorage.getItem("wordle_estado_" + getTodayKey());
     if (estadoGuardado) {
-      const estado = JSON.parse(estadoGuardado);
-      setIntentos(estado.intentos);
-      setJuegoTerminado(true);
-      setGano(estado.gano);
+      try {
+        const estado = JSON.parse(estadoGuardado);
+        setIntentos(estado.intentos || []);
+        // Si el juego terminó, restaurar estado final
+        if (estado.terminado) {
+          setJuegoTerminado(true);
+          setGano(estado.gano || false);
+        }
+        // Si no terminó pero hay intentos, restaurar en curso
+        // (juegoTerminado queda false, el jugador puede seguir)
+      } catch (e) {
+        console.error("Error restaurando estado:", e);
+      }
     }
     setCargado(true);
   };
+
+  // Guardar estado parcial cada vez que cambian los intentos
+  useEffect(() => {
+    if (!cargado) return;
+    const estadoActual = localStorage.getItem("wordle_estado_" + getTodayKey());
+    const estado = estadoActual ? JSON.parse(estadoActual) : {};
+    // Solo actualizar si no terminó (si terminó, guardarResultado ya lo hizo)
+    if (!estado.terminado) {
+      localStorage.setItem("wordle_estado_" + getTodayKey(), JSON.stringify({
+        intentos,
+        terminado: false,
+        gano: false,
+      }));
+    }
+  }, [intentos, cargado]);
 
   const evaluar = (intento, palabra) => {
     const res = Array(5).fill(null).map((_, i) => ({ letra: intento[i], estado: "absent" }));
@@ -133,15 +185,16 @@ export default function Wordle() {
   };
 
   const guardarResultado = async (intentosFinal, gano) => {
-    // Guardar estado local para no repetir hoy
-    localStorage.setItem("wordle_estado_" + getTodayKey(), JSON.stringify({ intentos: intentosFinal, gano }));
+    // Guardar estado final — marcado como terminado
+    localStorage.setItem("wordle_estado_" + getTodayKey(), JSON.stringify({
+      intentos: intentosFinal,
+      terminado: true,
+      gano,
+    }));
 
     const nombre = userName;
     const uid = user?.uid || "anonimo";
 
-    // --- Ranking diario en Firestore ---
-    // Documento: wordleRanking/{fecha}
-    // Campo: jugadores[uid] = { nombre, intentos, gano, ts }
     try {
       const refDiario = doc(db, "wordleRanking", getTodayKey());
       const snapDiario = await getDoc(refDiario);
@@ -152,15 +205,11 @@ export default function Wordle() {
       console.error("Error guardando ranking diario:", e);
     }
 
-    // --- Ranking mensual en Firestore ---
-    // Documento: wordleRankingMensual/{año-mes}
-    // Campo: jugadores[uid] = { nombre, victorias, totalIntentos, partidas }
     try {
       const refMensual = doc(db, "wordleRankingMensual", getMonthKey());
       const snapMensual = await getDoc(refMensual);
       const jugadores = snapMensual.exists() ? (snapMensual.data().jugadores || {}) : {};
       if (!jugadores[uid]) jugadores[uid] = { nombre, victorias: 0, totalIntentos: 0, partidas: 0 };
-      // Actualizar nombre por si cambió
       jugadores[uid].nombre = nombre;
       jugadores[uid].partidas++;
       if (gano) {
@@ -174,30 +223,22 @@ export default function Wordle() {
   };
 
   const cargarRankings = async () => {
-    // Ranking diario
     try {
       const snapDiario = await getDoc(doc(db, "wordleRanking", getTodayKey()));
       const jugadores = snapDiario.exists() ? Object.values(snapDiario.data().jugadores || {}) : [];
-      const listaDiaria = jugadores.sort((a, b) =>
+      setRankingDiario(jugadores.sort((a, b) =>
         a.gano === b.gano ? a.intentos - b.intentos : (b.gano ? 1 : -1)
-      );
-      setRankingDiario(listaDiaria);
-    } catch (e) {
-      setRankingDiario([]);
-    }
+      ));
+    } catch (e) { setRankingDiario([]); }
 
-    // Ranking mensual
     try {
       const snapMensual = await getDoc(doc(db, "wordleRankingMensual", getMonthKey()));
       const jugadores = snapMensual.exists() ? Object.values(snapMensual.data().jugadores || {}) : [];
-      const listaMensual = jugadores.sort((a, b) =>
+      setRankingMensual(jugadores.sort((a, b) =>
         b.victorias !== a.victorias ? b.victorias - a.victorias
           : (a.victorias > 0 ? a.totalIntentos / a.victorias : 99) - (b.victorias > 0 ? b.totalIntentos / b.victorias : 99)
-      );
-      setRankingMensual(listaMensual);
-    } catch (e) {
-      setRankingMensual([]);
-    }
+      ));
+    } catch (e) { setRankingMensual([]); }
   };
 
   const estadosLetras = {};
@@ -221,7 +262,6 @@ export default function Wordle() {
 
   if (!cargado) return null;
 
-  // Tamaños responsivos: se achican en pantallas chicas
   const celdaSize = "clamp(38px, 11vw, 52px)";
   const celdaFont = "clamp(15px, 4vw, 20px)";
   const teclaMin = "clamp(24px, 7.5vw, 34px)";
@@ -237,7 +277,6 @@ export default function Wordle() {
       </div>
       <div style={{ textAlign: "center", fontSize: 12, color: "#999", marginBottom: 16, textTransform: "capitalize" }}>{nombreHoy}</div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
         {[["juego","Juego"],["diario","Ranking diario"],["mensual","Ranking mensual"]].map(([k, label]) => (
           <button key={k} style={{
@@ -254,7 +293,6 @@ export default function Wordle() {
 
       {tab === "juego" && (
         <>
-          {/* Leyenda */}
           <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
             {[["#1D9E75","Correcta"],["#BA7517","Presente"],["#ccc","Ausente"]].map(([c, l]) => (
               <div key={l} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#666" }}>
@@ -264,7 +302,6 @@ export default function Wordle() {
             ))}
           </div>
 
-          {/* Tablero */}
           <div style={{ display: "flex", flexDirection: "column", gap: "clamp(4px, 1.5vw, 6px)", alignItems: "center", marginBottom: 14 }}>
             {Array.from({ length: MAX_INTENTOS }).map((_, i) => (
               <div key={i} style={{ display: "flex", gap: "clamp(4px, 1.5vw, 6px)" }}>
@@ -290,10 +327,8 @@ export default function Wordle() {
             ))}
           </div>
 
-          {/* Mensaje */}
           {msg && <div style={{ textAlign: "center", fontSize: 14, color: "#e74c3c", marginBottom: 8 }}>{msg}</div>}
 
-          {/* Resultado */}
           {juegoTerminado && (
             <div style={{ textAlign: "center", padding: "10px 0", marginBottom: 10 }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: gano ? "#1D9E75" : "#e74c3c", marginBottom: 4 }}>
@@ -305,7 +340,6 @@ export default function Wordle() {
             </div>
           )}
 
-          {/* Teclado */}
           {!juegoTerminado && (
             <div style={{ display: "flex", flexDirection: "column", gap: "clamp(4px, 1.5vw, 6px)", alignItems: "center" }}>
               {filasTeclado.map((fila, fi) => (

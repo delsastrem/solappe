@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db, auth } from "../firebase";
-import { collection, getDocs, addDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, query, where } from "firebase/firestore";
 import { getTurnoParaDia } from "../utils/distribucion";
 import { getCoordinadoresMes } from "../utils/coordinadores";
 import html2canvas from "html2canvas";
@@ -190,6 +190,25 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     if (!diaCompSeleccionado) return;
     setEnviando(true);
     try {
+      // Verificar que no exista ya una solicitud pendiente entre estos dos usuarios
+      // para los mismos días — evitar envío a múltiples personas del mismo día
+      const snapExistentes = await getDocs(
+        query(
+          collection(db, "solicitudesCambio"),
+          where("solicitanteId", "==", user.uid),
+          where("estado", "==", "pendiente"),
+          where("diaOrigen", "==", modalCambio.diaOrigen),
+          where("mesOrigen", "==", mes),
+          where("anioOrigen", "==", anio)
+        )
+      );
+
+      if (!snapExistentes.empty) {
+        setMensajeCambio("⚠️ Ya tenés una solicitud pendiente para ese día. Cancelala antes de enviar una nueva.");
+        setEnviando(false);
+        return;
+      }
+
       await addDoc(collection(db, "solicitudesCambio"), {
         solicitanteId: user.uid,
         receptorId: compSeleccionado,
@@ -479,7 +498,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
                 <button style={styles.modalBotonVolver} onClick={() => setPaso(1)}>← Volver</button>
                 {diaCompSeleccionado && (
                   <button style={styles.modalBotonEnviar} onClick={enviarSolicitud} disabled={enviando}>
-                    {enviando ? "Enviando..." : "Solicitar cambio"}
+                    {enviando ? "Verificando..." : "Solicitar cambio"}
                   </button>
                 )}
               </div>
@@ -487,7 +506,9 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
           )}
           {paso === 3 && (
             <div style={styles.modalExito}>
-              <p style={{ color: "#27ae60", fontWeight: 600, fontSize: 15 }}>{mensajeCambio}</p>
+              <p style={{ color: mensajeCambio.startsWith("⚠️") ? "#e74c3c" : "#27ae60", fontWeight: 600, fontSize: 15 }}>
+                {mensajeCambio}
+              </p>
               <button style={styles.modalBotonEnviar} onClick={cerrarModal}>Cerrar</button>
             </div>
           )}
