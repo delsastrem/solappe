@@ -47,7 +47,7 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
 
   const soloQ1 = inscriptos.filter(e => e.preferencia === "q1");
   const soloQ2 = inscriptos.filter(e => e.preferencia === "q2");
-  const ambos  = inscriptos.filter(e => e.preferencia === "ambas");
+  const ambos = inscriptos.filter(e => e.preferencia === "ambas");
 
   const asignadosQ1 = [...soloQ1];
   const asignadosQ2 = [...soloQ2];
@@ -60,9 +60,20 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
 
   for (const emp of ambosOrdenados) {
     const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
-    const enQ1 = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
-    const enQ2 = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
-    const preferirQ1 = enQ1 < enQ2 || (enQ1 === enQ2 && asignadosQ1.length <= asignadosQ2.length);
+    const enQ1Esp = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+    const enQ2Esp = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+
+    // Criterio principal: balance TOTAL entre quincenas (no solo por especialidad)
+    // Criterio secundario: balance por especialidad como desempate
+    let preferirQ1;
+    if (asignadosQ1.length !== asignadosQ2.length) {
+      preferirQ1 = asignadosQ1.length < asignadosQ2.length;
+    } else if (enQ1Esp !== enQ2Esp) {
+      preferirQ1 = enQ1Esp < enQ2Esp;
+    } else {
+      preferirQ1 = true;
+    }
+
     if (preferirQ1) {
       asignadosQ1.push({ ...emp, preferencia: "q1" });
     } else {

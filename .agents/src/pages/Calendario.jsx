@@ -7,9 +7,9 @@ import html2canvas from "html2canvas";
 
 const COLORES_TURNO = {
   mañana: { bg: "#fff8e1", border: "#f39c12", texto: "#856404", label: "☀️ Mañana" },
-  tarde:  { bg: "#e8f5e9", border: "#27ae60", texto: "#1e8449", label: "🌅 Tarde" },
-  noche:  { bg: "#e8eaf6", border: "#3f51b5", texto: "#283593", label: "🌙 Noche" },
-  franco: { bg: "#f5f5f5", border: "#ccc",    texto: "#999",    label: "Franco" },
+  tarde: { bg: "#e8f5e9", border: "#27ae60", texto: "#1e8449", label: "🌅 Tarde" },
+  noche: { bg: "#e8eaf6", border: "#3f51b5", texto: "#283593", label: "🌙 Noche" },
+  franco: { bg: "#f5f5f5", border: "#ccc", texto: "#999", label: "Franco" },
 };
 
 const LABEL_ESP = { MONTAJE: "Montaje", MOTORES: "Motores", AVIONICA: "Avionica" };
@@ -108,7 +108,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     return todasPendientes.some(s =>
       (s.solicitanteId === empleadoId || s.receptorId === empleadoId) &&
       ((s.diaOrigen === dia && s.mesOrigen === mes && s.anioOrigen === anio) ||
-       (s.diaDestino === dia && s.mesDestino === mes && s.anioDestino === anio))
+        (s.diaDestino === dia && s.mesDestino === mes && s.anioDestino === anio))
     );
   };
 
@@ -135,7 +135,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     let nuevoMes = mes + delta;
     let nuevoAnio = anio;
     if (nuevoMes > 12) { nuevoMes = 1; nuevoAnio++; }
-    if (nuevoMes < 1)  { nuevoMes = 12; nuevoAnio--; }
+    if (nuevoMes < 1) { nuevoMes = 12; nuevoAnio--; }
     setMes(nuevoMes);
     setAnio(nuevoAnio);
   };
@@ -149,12 +149,12 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
 
   const diasDelComp = compSeleccionado
     ? Object.entries(mapaDias)
-        .flatMap(([dia, asigs]) =>
-          asigs
-            .filter(a => a.empleadoId === compSeleccionado)
-            .map(a => ({ dia: parseInt(dia), ...a }))
-        )
-        .filter(d => !mapaDias[d.dia]?.some(a => a.empleadoId === user?.uid))
+      .flatMap(([dia, asigs]) =>
+        asigs
+          .filter(a => a.empleadoId === compSeleccionado)
+          .map(a => ({ dia: parseInt(dia), ...a }))
+      )
+      .filter(d => !mapaDias[d.dia]?.some(a => a.empleadoId === user?.uid))
     : [];
 
   const compañerosDisponibles = Object.entries(empleados)
@@ -190,8 +190,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
     if (!diaCompSeleccionado) return;
     setEnviando(true);
     try {
-      // Verificar que no exista ya una solicitud pendiente entre estos dos usuarios
-      // para los mismos días — evitar envío a múltiples personas del mismo día
+      // Verificar que no exista ya una solicitud pendiente del solicitante para ese día
       const snapExistentes = await getDocs(
         query(
           collection(db, "solicitudesCambio"),
@@ -205,6 +204,26 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
 
       if (!snapExistentes.empty) {
         setMensajeCambio("⚠️ Ya tenés una solicitud pendiente para ese día. Cancelala antes de enviar una nueva.");
+        setEnviando(false);
+        return;
+      }
+
+      // Verificar que el RECEPTOR no esté ya asignado el día que va a recibir (día origen)
+      const receptorYaEnOrigen = mapaDias[modalCambio.diaOrigen]?.some(
+        a => a.empleadoId === compSeleccionado
+      );
+      if (receptorYaEnOrigen) {
+        setMensajeCambio("⚠️ Tu compañero ya está asignado ese día. No se puede hacer este cambio.");
+        setEnviando(false);
+        return;
+      }
+
+      // Verificar que el SOLICITANTE no esté ya asignado el día que va a tomar (día destino)
+      const yoYaEnDestino = mapaDias[diaCompSeleccionado.dia]?.some(
+        a => a.empleadoId === user.uid
+      );
+      if (yoYaEnDestino) {
+        setMensajeCambio("⚠️ Ya estás asignado ese día. No se puede hacer este cambio.");
         setEnviando(false);
         return;
       }
@@ -321,9 +340,9 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
         }}
         title={
           pendiente ? "⚠️ Cambio pendiente"
-          : esMio ? "Clic para solicitar cambio"
-          : confirmado ? "✓ Confirmado"
-          : ""
+            : esMio ? "Clic para solicitar cambio"
+              : confirmado ? "✓ Confirmado"
+                : ""
         }
       >
         {confirmado ? "✓ " : ""}{pendiente ? "⚠️ " : ""}{nombre}{esMio && !confirmado && !pendiente ? " 🔄" : ""}
@@ -579,7 +598,7 @@ export default function Calendario({ esAdmin, solicitudesEnviadas = [], solicitu
       <div ref={calendarioRef}>
         {vista === "calendario" && !mobile ? (
           <div style={styles.grid}>
-            {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d => (
+            {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map(d => (
               <div key={d} style={styles.headerDia}>{d}</div>
             ))}
             {renderCalendario()}
