@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth";
 import { auth, db } from "../firebase";
-import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, updateDoc, addDoc, query, where, serverTimestamp } from "firebase/firestore";
 import Calendario from "./Calendario";
-import Wordle from "./Wordle";
 import { marcarLeido, suscribirAvisos } from "../utils/avisos";
 
 export default function Dashboard() {
@@ -32,6 +31,20 @@ export default function Dashboard() {
   const [misAsignaciones, setMisAsignaciones] = useState([]);
   const [resumenMeses, setResumenMeses] = useState([]);
   const [mesResumenSeleccionado, setMesResumenSeleccionado] = useState(null);
+
+  // Cesiones
+  const [cesionesPendientes, setCesionesPendientes] = useState([]);
+  const [cesionesEnviadas, setCesionesEnviadas] = useState([]);
+  const [historialCesiones, setHistorialCesiones] = useState([]);
+  const [modalCesion, setModalCesion] = useState(false);
+  const [cesionDiaSeleccionado, setCesionDiaSeleccionado] = useState(null);
+  const [cesionReceptorId, setCesionReceptorId] = useState("");
+  const [enviandoCesion, setEnviandoCesion] = useState(false);
+  const [mensajeCesion, setMensajeCesion] = useState("");
+  const [procesandoCesion, setProcesandoCesion] = useState(null);
+
+  // Compañero preferido
+  const [companeroPreferidoId, setCompaneroPreferidoId] = useState("");
 
   // Notificaciones
   const [notificaciones, setNotificaciones] = useState([]);
@@ -72,6 +85,7 @@ export default function Dashboard() {
     cargarRatioPropio();
     cargarHistorialPropio();
     cargarMisAsignaciones();
+    cargarCesiones();
     if (user) {
       const unsub = suscribirAvisos(user.uid, setNotificaciones);
       return () => unsub();
@@ -80,7 +94,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (seccion === "cuenta") cargarRatioPropio();
-    if (seccion === "cambios") { cargarSolicitudes(); cargarHistorialPropio(); }
+    if (seccion === "cambios") { cargarSolicitudes(); cargarHistorialPropio(); cargarCesiones(); }
     if (seccion === "resumen") cargarResumen();
   }, [seccion]);
 
@@ -117,6 +131,108 @@ export default function Dashboard() {
     const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     setSolicitudesPendientes(todas.filter(s => s.receptorId === user.uid && s.estado === "pendiente"));
     setSolicitudesEnviadas(todas.filter(s => s.solicitanteId === user.uid && s.estado === "pendiente"));
+  };
+
+  const cargarCesiones = async () => {
+    if (!user) return;
+    const snap = await getDocs(collection(db, "cesiones"));
+    const todas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    setCesionesPendientes(todas.filter(c => c.receptorId === user.uid && c.estado === "pendiente"));
+    setCesionesEnviadas(todas.filter(c => c.cedorId === user.uid && c.estado === "pendiente"));
+    setHistorialCesiones(
+      todas
+        .filter(c => c.estado !== "pendiente" && (c.cedorId === user.uid || c.receptorId === user.uid))
+        .sort((a, b) => new Date(b.creadoEn) - new Date(a.creadoEn))
+    );
+  };
+
+  const enviarCesion = async () => {
+    if (!cesionDiaSeleccionado || !cesionReceptorId) {
+      setMensajeCesion("Elegí un día y un compañero");
+      return;
+    }
+    setEnviandoCesion(true);
+    setMensajeCesion("");
+    try {
+      // Buscar el doc de asignaciones que contiene ese día
+      const snap = await getDocs(collection(db, "asignaciones"));
+      let asigDoc = null;
+      snap.docs.forEach(d => {
+        if (d.data().empleadoId === user.uid) {
+          const found = d.data().dias.find(dia => dia.label === cesionDiaSeleccionado.label && dia.turno === cesionDiaSeleccionado.turno);
+          if (found) asigDoc = { id: d.id, ...d.data() };
+        }
+      });
+      if (!asigDoc) {
+        setMensajeCesion("No se encontró la asignación");
+        setEnviandoCesion(false);
+        return;
+      }
+      await addDoc(collection(db, "cesiones"), {
+        cedorId: user.uid,
+        receptorId: cesionReceptorId,
+        diaLabel: cesionDiaSeleccionado.label,
+        diaTurno: cesionDiaSeleccionado.turno,
+        diaFecha: cesionDiaSeleccionado.fecha,
+        asigId: asigDoc.id,
+        estado: "pendiente",
+        creadoEn: new Date().toISOString(),
+      });
+      setMensajeCesion("✓ Cesión enviada. Esperá que tu compañero la acepte.");
+      setCesionDiaSeleccionado(null);
+      setCesionReceptorId("");
+      cargarCesiones();
+      setTimeout(() => { setModalCesion(false); setMensajeCesion(""); }, 2000);
+    } catch (err) {
+      setMensajeCesion("Error: " + err.message);
+    }
+    setEnviandoCesion(false);
+  };
+
+  const responderCesion = async (cesion, aceptar) => {
+    setProcesandoCesion(cesion.id);
+    try {
+      if (aceptar) {
+        // Swap en asignaciones: sacar el día del cedor y dárselo al receptor
+        const snapAsig = await getDocs(collection(db, "asignaciones"));
+        // Doc del cedente
+        const cedorDoc = snapAsig.docs.find(d => d.id === cesion.asigId);
+        if (cedorDoc) {
+          const diasCedor = cedorDoc.data().dias;
+          const diaATransferir = diasCedor.find(d => d.label === cesion.diaLabel && d.turno === cesion.diaTurno);
+          if (diaATransferir) {
+            // Quitar día del cedor
+            const nuevosDiasCedor = diasCedor.filter(d => !(d.label === cesion.diaLabel && d.turno === cesion.diaTurno));
+            await updateDoc(doc(db, "asignaciones", cesion.asigId), { dias: nuevosDiasCedor });
+            // Buscar doc del receptor para el mismo mes/quincena, o crear uno
+            const mesNum = new Date(cesion.diaFecha).getMonth() + 1;
+            const anioNum = new Date(cesion.diaFecha).getFullYear();
+            const quincenaNum = new Date(cesion.diaFecha).getDate() <= 15 ? 1 : 2;
+            const inscKey = `${anioNum}-${mesNum}`;
+            const receptorAsigId = `${cesion.receptorId}_${inscKey}_q${quincenaNum}`;
+            const receptorDocSnap = await getDoc(doc(db, "asignaciones", receptorAsigId));
+            if (receptorDocSnap.exists()) {
+              const diasReceptor = receptorDocSnap.data().dias;
+              await updateDoc(doc(db, "asignaciones", receptorAsigId), { dias: [...diasReceptor, diaATransferir] });
+            } else {
+              await setDoc(doc(db, "asignaciones", receptorAsigId), {
+                empleadoId: cesion.receptorId,
+                mes: mesNum, anio: anioNum, quincena: quincenaNum,
+                dias: [diaATransferir],
+              });
+            }
+          }
+        }
+      }
+      await updateDoc(doc(db, "cesiones", cesion.id), {
+        estado: aceptar ? "aceptada" : "rechazada",
+        respondidoEn: new Date().toISOString(),
+      });
+      cargarCesiones();
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+    setProcesandoCesion(null);
   };
 
   // Historial propio agrupado por mes — sin límite
@@ -252,6 +368,7 @@ export default function Dashboard() {
       empleadoId: user.uid, nombre: empleado.nombre, apellido: empleado.apellido,
       preferencia, mes: mesProximo, anio: anioProximo,
       fechaInscripcion: new Date().toISOString(),
+      companeroPreferidoId: companeroPreferidoId || null,
     });
     setMensaje("✓ Inscripción guardada correctamente");
     cargarDatos();
@@ -351,12 +468,13 @@ export default function Dashboard() {
   };
 
   const labelTab = (s) => {
-    const total = solicitudesPendientes.length + solicitudesEnviadas.length;
+    const totalCambios = solicitudesPendientes.length + solicitudesEnviadas.length;
+    const totalCesiones = cesionesPendientes.length;
+    const total = totalCambios + totalCesiones;
     if (s === "inscripcion") return `📋 ${mobile ? "Inscripción" : `Inscripción — ${nombreMes}`}`;
     if (s === "calendario") return "📅 Calendario";
     if (s === "resumen") return "📊 Resumen";
     if (s === "cambios") return total > 0 ? `🔄 Cambios (${total})` : "🔄 Cambios";
-    if (s === "wordle") return "✈️ AeroWordle";
     return "🔑 Mi cuenta";
   };
 
@@ -448,12 +566,14 @@ export default function Dashboard() {
 
   return (
     <div style={styles.container}>
-      {(solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0) && seccion !== "cambios" && (
+      {(solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0 || cesionesPendientes.length > 0) && seccion !== "cambios" && (
         <div style={styles.banner} onClick={() => setSeccion("cambios")}>
           🔔{" "}
           {solicitudesPendientes.length > 0 && `Tenés ${solicitudesPendientes.length} solicitud${solicitudesPendientes.length > 1 ? "es" : ""} pendiente${solicitudesPendientes.length > 1 ? "s" : ""}`}
-          {solicitudesPendientes.length > 0 && solicitudesEnviadas.length > 0 && " · "}
+          {solicitudesPendientes.length > 0 && (solicitudesEnviadas.length > 0 || cesionesPendientes.length > 0) && " · "}
           {solicitudesEnviadas.length > 0 && `${solicitudesEnviadas.length} solicitud${solicitudesEnviadas.length > 1 ? "es" : ""} enviada${solicitudesEnviadas.length > 1 ? "s" : ""} en espera`}
+          {solicitudesEnviadas.length > 0 && cesionesPendientes.length > 0 && " · "}
+          {cesionesPendientes.length > 0 && `${cesionesPendientes.length} cesión${cesionesPendientes.length > 1 ? "es" : ""} pendiente${cesionesPendientes.length > 1 ? "s" : ""}`}
           {". Tocá para ver."}
         </div>
       )}
@@ -518,13 +638,13 @@ export default function Dashboard() {
       </div>
 
       <div style={styles.tabs}>
-        {["inscripcion", "calendario", "resumen", "cambios", "wordle", "cuenta"].map(s => (
+        {["inscripcion", "calendario", "resumen", "cambios", "cuenta"].map(s => (
           <button
             key={s}
             style={{
               ...styles.tab,
               ...(seccion === s ? styles.tabActivo : {}),
-              ...((s === "cambios" && (solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0)) ? styles.tabAlerta : {}),
+              ...((s === "cambios" && (solicitudesPendientes.length > 0 || solicitudesEnviadas.length > 0 || cesionesPendientes.length > 0)) ? styles.tabAlerta : {}),
             }}
             onClick={() => setSeccion(s)}
           >
@@ -557,6 +677,24 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+                <p style={{ ...styles.label, marginTop: 16 }}>¿Querés pedir quedar con un compañero? (opcional)</p>
+                <select
+                  style={styles.input}
+                  value={companeroPreferidoId}
+                  onChange={e => setCompaneroPreferidoId(e.target.value)}
+                >
+                  <option value="">Sin preferencia de compañero</option>
+                  {Object.entries(empleados)
+                    .filter(([id]) => id !== user?.uid)
+                    .sort(([, a], [, b]) => a.apellido.localeCompare(b.apellido))
+                    .map(([id, emp]) => (
+                      <option key={id} value={id}>{emp.apellido}, {emp.nombre}</option>
+                    ))
+                  }
+                </select>
+                <p style={{ fontSize: 12, color: "#999", marginTop: 4, marginBottom: 12 }}>
+                  Solo se aplica si él/ella también te elige a vos y están en la misma quincena posible.
+                </p>
                 {mensaje && <p style={styles.mensaje}>{mensaje}</p>}
                 <button style={styles.boton} onClick={inscribirse} disabled={loading}>
                   {loading ? "Guardando..." : "Confirmar inscripción"}
@@ -648,6 +786,75 @@ export default function Dashboard() {
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {/* Modal de cesión */}
+        {modalCesion && (
+          <div style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(0,0,0,0.5)", zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+          }}>
+            <div style={{ background: "white", borderRadius: 16, padding: 24, width: "100%", maxWidth: 400 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: "#1a1a2e", marginBottom: 16 }}>
+                🤝 Dar un día a un compañero
+              </h3>
+              <p style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>
+                El día pasa a su nombre en el calendario. Queda registrada la deuda para que pueda devolverte uno después.
+              </p>
+              <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>¿Qué día querés dar?</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16, maxHeight: 200, overflowY: "auto" }}>
+                {misAsignaciones.flatMap(asig => asig.dias).filter(d => new Date(d.fecha) >= new Date()).map((d, i) => (
+                  <button
+                    key={i}
+                    style={{
+                      padding: "8px 12px", borderRadius: 8, textAlign: "left", cursor: "pointer",
+                      border: `2px solid ${cesionDiaSeleccionado?.label === d.label && cesionDiaSeleccionado?.turno === d.turno ? "#e67e22" : "#ddd"}`,
+                      background: cesionDiaSeleccionado?.label === d.label && cesionDiaSeleccionado?.turno === d.turno ? "#fff3e0" : "white",
+                      fontWeight: cesionDiaSeleccionado?.label === d.label ? 600 : 400,
+                    }}
+                    onClick={() => setCesionDiaSeleccionado(d)}
+                  >
+                    {d.label} — {d.turno} {d.turno === "mañana" ? "☀️" : d.turno === "tarde" ? "🌅" : "🌙"}
+                  </button>
+                ))}
+                {misAsignaciones.flatMap(asig => asig.dias).filter(d => new Date(d.fecha) >= new Date()).length === 0 && (
+                  <p style={{ color: "#999", fontSize: 13 }}>No tenés días futuros asignados</p>
+                )}
+              </div>
+              <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>¿A quién se lo das?</p>
+              <select
+                style={{ ...styles.input, marginBottom: 16 }}
+                value={cesionReceptorId}
+                onChange={e => setCesionReceptorId(e.target.value)}
+              >
+                <option value="">Seleccioná un compañero</option>
+                {Object.entries(empleados)
+                  .filter(([id]) => id !== user?.uid)
+                  .sort(([, a], [, b]) => a.apellido.localeCompare(b.apellido))
+                  .map(([id, emp]) => (
+                    <option key={id} value={id}>{emp.apellido}, {emp.nombre}</option>
+                  ))
+                }
+              </select>
+              {mensajeCesion && (
+                <p style={{ color: mensajeCesion.startsWith("✓") ? "#27ae60" : "#e74c3c", fontSize: 13, marginBottom: 12, fontWeight: 500 }}>
+                  {mensajeCesion}
+                </p>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={{ ...styles.boton, background: "#e67e22", flex: 1 }} onClick={enviarCesion} disabled={enviandoCesion}>
+                  {enviandoCesion ? "Enviando..." : "Enviar cesión"}
+                </button>
+                <button
+                  style={{ ...styles.botonCancelar, marginTop: 0 }}
+                  onClick={() => { setModalCesion(false); setMensajeCesion(""); setCesionDiaSeleccionado(null); setCesionReceptorId(""); }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -807,13 +1014,129 @@ export default function Dashboard() {
                 </>
               )}
             </div>
-          </>
-        )}
 
-        {seccion === "wordle" && (
-          <div style={styles.card}>
-            <Wordle />
-          </div>
+            {/* ── CESIONES ── */}
+            {/* Botón para dar un día */}
+            <div style={styles.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h2 style={{ ...styles.cardTitle, marginBottom: 0 }}>🤝 Cesiones de días</h2>
+                <button
+                  style={{ background: "#e67e22", color: "white", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                  onClick={() => setModalCesion(true)}
+                >
+                  + Dar un día
+                </button>
+              </div>
+              <p style={{ fontSize: 13, color: "#888", marginBottom: 0 }}>
+                Podés ceder uno de tus días de trabajo a un compañero. El día pasa a su nombre sin necesidad de intercambio.
+              </p>
+            </div>
+
+            {/* Cesiones recibidas pendientes */}
+            {cesionesPendientes.length > 0 && (
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>🟠 Días recibidos — pendientes de respuesta</h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {cesionesPendientes.map(c => {
+                    const cedor = empleados[c.cedorId];
+                    return (
+                      <div key={c.id} style={{ ...styles.solicitudCard, borderLeft: "4px solid #e67e22", background: "#fff8f0" }}>
+                        <div style={{ marginBottom: 8 }}>
+                          <span style={{ fontSize: 14, color: "#1a1a2e" }}>
+                            <strong>{cedor ? `${cedor.apellido}, ${cedor.nombre}` : "..."}</strong> te cede un día:
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#e67e22", marginBottom: 8 }}>
+                          📅 {c.diaLabel} — {c.diaTurno}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#aaa", marginBottom: 10 }}>
+                          Recibida el {c.creadoEn?.toDate ? c.creadoEn.toDate().toLocaleDateString("es-AR") : new Date(c.creadoEn).toLocaleDateString("es-AR")}
+                        </div>
+                        <div style={styles.solicitudBotones}>
+                          <button
+                            style={styles.botonAceptar}
+                            onClick={() => responderCesion(c, true)}
+                            disabled={procesandoCesion === c.id}
+                          >
+                            {procesandoCesion === c.id ? "..." : "✓ Aceptar"}
+                          </button>
+                          <button
+                            style={styles.botonRechazar}
+                            onClick={() => responderCesion(c, false)}
+                            disabled={procesandoCesion === c.id}
+                          >
+                            ✕ Rechazar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Cesiones enviadas pendientes */}
+            {cesionesEnviadas.length > 0 && (
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>⏳ Días cedidos — esperando respuesta</h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {cesionesEnviadas.map(c => {
+                    const receptor = empleados[c.receptorId];
+                    return (
+                      <div key={c.id} style={{ ...styles.solicitudCard, borderLeft: "4px solid #f39c12", background: "#fffbf0" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                          <span style={{ fontSize: 13, color: "#1a1a2e" }}>
+                            Esperando respuesta de <strong>{receptor ? `${receptor.apellido}, ${receptor.nombre}` : "..."}</strong>
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 6, background: "#fef3cd", color: "#856404" }}>
+                            ⏳ Pendiente
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#e67e22" }}>
+                          📅 {c.diaLabel} — {c.diaTurno}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+                          Enviada el {c.creadoEn?.toDate ? c.creadoEn.toDate().toLocaleDateString("es-AR") : new Date(c.creadoEn).toLocaleDateString("es-AR")}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Historial de cesiones */}
+            {historialCesiones.length > 0 && (
+              <div style={styles.card}>
+                <h2 style={styles.cardTitle}>📋 Historial de cesiones</h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {historialCesiones.map(c => {
+                    const esCedor = c.cedorId === empleado?.uid;
+                    const otro = empleados[esCedor ? c.receptorId : c.cedorId];
+                    const nombre = otro ? `${otro.apellido}, ${otro.nombre}` : "...";
+                    const aceptada = c.estado === "aceptada";
+                    return (
+                      <div key={c.id} style={{ ...styles.historialItem, border: `1px solid ${aceptada ? "#d5f0de" : "#fde8e8"}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontSize: 13, color: "#555" }}>
+                            {esCedor ? `Cediste a ${nombre}` : `Recibiste de ${nombre}`}
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 6,
+                            background: aceptada ? "#d5f0de" : "#fde8e8",
+                            color: aceptada ? "#1e8449" : "#c0392b" }}>
+                            {aceptada ? "✓ Aceptada" : "✕ Rechazada"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#1a1a2e", fontWeight: 600 }}>
+                          📅 {c.diaLabel} — {c.diaTurno}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {seccion === "cuenta" && (

@@ -81,6 +81,56 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
     }
   }
 
+  // Compañero preferido: si dos personas se eligieron mutuamente,
+  // intentamos moverlas a la misma quincena sin superar MAX_POR_QUINCENA.
+  const todosAsignados = [...asignadosQ1, ...asignadosQ2];
+  const paresProcesadas = new Set();
+  for (const emp of todosAsignados) {
+    const idA = emp.empleadoId;
+    const prefId = emp.companeroPreferidoId;
+    if (!prefId || paresProcesadas.has(`${idA}-${prefId}`) || paresProcesadas.has(`${prefId}-${idA}`)) continue;
+    const empB = todosAsignados.find(e => e.empleadoId === prefId);
+    if (!empB || empB.companeroPreferidoId !== idA) continue; // no es mutuo
+    paresProcesadas.add(`${idA}-${prefId}`);
+    const enQ1A = asignadosQ1.some(e => e.empleadoId === idA);
+    const enQ1B = asignadosQ1.some(e => e.empleadoId === prefId);
+    if (enQ1A === enQ1B) continue; // ya están en la misma quincena
+    // A está en Q1 y B en Q2 (o viceversa) — intentamos mover B a la quincena de A
+    if (enQ1A && !enQ1B) {
+      // mover B de Q2 a Q1 si hay espacio
+      if (asignadosQ1.length < MAX_POR_QUINCENA) {
+        const idx = asignadosQ2.findIndex(e => e.empleadoId === prefId);
+        if (idx !== -1) {
+          asignadosQ2.splice(idx, 1);
+          asignadosQ1.push({ ...empB, preferencia: "q1" });
+        }
+      } else if (asignadosQ2.length < MAX_POR_QUINCENA) {
+        // mover A de Q1 a Q2
+        const idx = asignadosQ1.findIndex(e => e.empleadoId === idA);
+        if (idx !== -1) {
+          asignadosQ1.splice(idx, 1);
+          asignadosQ2.push({ ...emp, preferencia: "q2" });
+        }
+      }
+    } else {
+      // B en Q1, A en Q2 — mover A a Q1 si hay espacio
+      if (asignadosQ1.length < MAX_POR_QUINCENA) {
+        const idx = asignadosQ2.findIndex(e => e.empleadoId === idA);
+        if (idx !== -1) {
+          asignadosQ2.splice(idx, 1);
+          asignadosQ1.push({ ...emp, preferencia: "q1" });
+        }
+      } else if (asignadosQ2.length < MAX_POR_QUINCENA) {
+        // mover B de Q1 a Q2
+        const idx = asignadosQ1.findIndex(e => e.empleadoId === prefId);
+        if (idx !== -1) {
+          asignadosQ1.splice(idx, 1);
+          asignadosQ2.push({ ...empB, preferencia: "q2" });
+        }
+      }
+    }
+  }
+
   const aplicarMaximo = (lista, historial) => {
     if (lista.length <= MAX_POR_QUINCENA) return { seleccionados: lista, descartados: [] };
     const sorted = [...lista].sort((a, b) => {

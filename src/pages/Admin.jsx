@@ -7,7 +7,6 @@ import {
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { distribuir, distribuirAmbasQuincenas, getTurnoParaDia } from "../utils/distribucion";
 import Calendario from "./Calendario";
-import Wordle from "./Wordle";
 import { enviarAviso, marcarLeido, suscribirAvisos } from "../utils/avisos";
 import { guardarCoordinador, quitarCoordinador, getCoordinadoresMes, getResumenCoordinadores } from "../utils/coordinadores";
 
@@ -682,7 +681,6 @@ export default function Admin() {
       ? `🔄 Cambios (${solicitudesPendientes.length})`
       : "🔄 Cambios";
     if (s === "coordinadores") return "⭐ Coordinadores";
-    if (s === "wordle") return "🎮 Wordle";
     return "🔑 Mi cuenta";
   };
 
@@ -926,7 +924,7 @@ export default function Admin() {
       </div>
 
       <div style={styles.tabs}>
-        {["empleados", "inscripciones", "resumen", "calendario", "asistencia", "coordinadores", "cambios", "wordle", "cuenta"].map(s => (
+        {["empleados", "inscripciones", "resumen", "calendario", "asistencia", "coordinadores", "cambios", "cuenta"].map(s => (
           <button
             key={s}
             style={{
@@ -1706,12 +1704,6 @@ export default function Admin() {
             </>
           );
         })()}
-
-        {seccion === "wordle" && (
-          <div style={styles.card}>
-            <Wordle />
-          </div>
-        )}
 
         {seccion === "cuenta" && (
           <div style={styles.card}>
