@@ -52,6 +52,11 @@ export default function Admin() {
   const [ratioPropio, setRatioPropio] = useState(null);
   const [editandoEsp, setEditandoEsp] = useState(null);
 
+  // Emparejamiento de compañeros preferidos
+  const [editandoCompanero, setEditandoCompanero] = useState(null); // inscripcionId que está siendo editado
+  const [companeroAdminSel, setCompaneroAdminSel] = useState(""); // uid elegido por el admin
+  const [guardandoCompanero, setGuardandoCompanero] = useState(false);
+
   // Coordinadores
   const [coordMes, setCoordMes] = useState(new Date().getMonth() + 1);
   const [coordAnio, setCoordAnio] = useState(new Date().getFullYear());
@@ -469,6 +474,30 @@ export default function Admin() {
     const nuevo = !inscripcionAbierta;
     await setDoc(doc(db, "config", "inscripcion"), { abierta: nuevo });
     setInscripcionAbierta(nuevo);
+  };
+
+  const guardarCompaneroAdmin = async (inscripcion) => {
+    setGuardandoCompanero(true);
+    try {
+      // Guardar en la inscripción del empleado A
+      await setDoc(doc(db, "inscripciones", inscripcion.id), { companeroPreferidoId: companeroAdminSel || null }, { merge: true });
+      // Si eligió un compañero, también actualizar la inscripción del compañero (B apunta a A)
+      if (companeroAdminSel) {
+        const snapB = await getDocs(collection(db, "inscripciones"));
+        const inscB = snapB.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .find(i => i.empleadoId === companeroAdminSel && i.mes === inscripcion.mes && i.anio === inscripcion.anio);
+        if (inscB) {
+          await setDoc(doc(db, "inscripciones", inscB.id), { companeroPreferidoId: inscripcion.empleadoId }, { merge: true });
+        }
+      }
+      await cargarInscripciones();
+      setEditandoCompanero(null);
+      setCompaneroAdminSel("");
+    } catch (err) {
+      alert("Error al guardar: " + err.message);
+    }
+    setGuardandoCompanero(false);
   };
 
   const agregarEmpleado = async () => {
@@ -1109,22 +1138,94 @@ export default function Admin() {
             <div style={styles.card}>
               <h2 style={styles.cardTitle}>Inscriptos ({inscripciones.length})</h2>
               {inscripciones.length === 0 && <p style={{ color: "#999" }}>Nadie inscripto todavía</p>}
-              {inscripciones.map(i => (
-                <div key={i.id} style={{
-                  ...styles.empleadoRow,
-                  flexDirection: mobile ? "column" : "row",
-                  alignItems: mobile ? "flex-start" : "center",
-                  gap: mobile ? 8 : 0,
-                }}>
-                  <div>
-                    <span style={styles.empleadoNombre}>{i.apellido}, {i.nombre}</span>
-                    <span style={styles.empleadoEmail}> — {labelPreferencia(i.preferencia)}</span>
-                  </div>
-                  <button style={styles.botonEliminar} onClick={() => borrarInscripcion(i.id, `${i.apellido}, ${i.nombre}`)}>
-                    Borrar
-                  </button>
-                </div>
-              ))}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {inscripciones.map(i => {
+                  // Buscar el compañero preferido declarado por el empleado
+                  const prefMutuo = i.companeroPreferidoId
+                    ? inscripciones.find(x => x.empleadoId === i.companeroPreferidoId)
+                    : null;
+                  // ¿Es mutuo? El compañero también lo eligió a él
+                  const esMutuo = prefMutuo && prefMutuo.companeroPreferidoId === i.empleadoId;
+                  const editando = editandoCompanero === i.id;
+
+                  return (
+                    <div key={i.id} style={{
+                      border: "1px solid #e8eaf6", borderRadius: 10, padding: "12px 14px",
+                      background: esMutuo ? "#f0fff4" : "white",
+                      borderLeft: esMutuo ? "4px solid #27ae60" : prefMutuo ? "4px solid #f39c12" : "4px solid #e8eaf6",
+                    }}>
+                      {/* Fila principal */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                        <div>
+                          <span style={{ fontWeight: 700, fontSize: 14, color: "#1a1a2e" }}>{i.apellido}, {i.nombre}</span>
+                          <span style={{ fontSize: 13, color: "#888", marginLeft: 8 }}>{labelPreferencia(i.preferencia)}</span>
+                        </div>
+                        <button style={styles.botonEliminar} onClick={() => borrarInscripcion(i.id, `${i.apellido}, ${i.nombre}`)}>
+                          Borrar
+                        </button>
+                      </div>
+
+                      {/* Compañero preferido */}
+                      <div style={{ marginTop: 8 }}>
+                        {!editando ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 12, color: "#666" }}>
+                              {prefMutuo
+                                ? esMutuo
+                                  ? <><span style={{ color: "#27ae60", fontWeight: 700 }}>✓ Par confirmado:</span> {prefMutuo.apellido}, {prefMutuo.nombre}</>
+                                  : <><span style={{ color: "#e67e22", fontWeight: 700 }}>⚠ Sin reciprocidad:</span> eligió a {prefMutuo.apellido}, {prefMutuo.nombre} pero no es mutuo</>
+                                : i.companeroPreferidoId
+                                  ? <span style={{ color: "#e74c3c" }}>⚠ Compañero elegido no está inscripto</span>
+                                  : <span style={{ color: "#bbb" }}>Sin compañero preferido</span>
+                              }
+                            </span>
+                            <button
+                              style={{ fontSize: 11, color: "#3f51b5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
+                              onClick={() => {
+                                setEditandoCompanero(i.id);
+                                setCompaneroAdminSel(i.companeroPreferidoId || "");
+                              }}
+                            >
+                              {i.companeroPreferidoId ? "Cambiar" : "Asignar compañero"}
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+                            <select
+                              style={{ ...styles.input, fontSize: 13, padding: "6px 10px", flex: 1, minWidth: 180 }}
+                              value={companeroAdminSel}
+                              onChange={e => setCompaneroAdminSel(e.target.value)}
+                            >
+                              <option value="">Sin compañero</option>
+                              {inscripciones
+                                .filter(x => x.empleadoId !== i.empleadoId)
+                                .map(x => (
+                                  <option key={x.empleadoId} value={x.empleadoId}>
+                                    {x.apellido}, {x.nombre}
+                                  </option>
+                                ))
+                              }
+                            </select>
+                            <button
+                              style={{ background: "#27ae60", color: "white", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}
+                              onClick={() => guardarCompaneroAdmin(i)}
+                              disabled={guardandoCompanero}
+                            >
+                              {guardandoCompanero ? "..." : "Guardar"}
+                            </button>
+                            <button
+                              style={{ background: "none", border: "1px solid #ddd", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer", color: "#666" }}
+                              onClick={() => { setEditandoCompanero(null); setCompaneroAdminSel(""); }}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </>
         )}
