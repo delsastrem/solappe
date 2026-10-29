@@ -52,81 +52,105 @@ export function distribuirAmbasQuincenas(inscriptos, anio, mes, historialDescart
   const asignadosQ1 = [...soloQ1];
   const asignadosQ2 = [...soloQ2];
 
+  // ── PASO 1: identificar pares mutuos entre los "ambas" ──────────────────────
+  // Si A y B se eligieron mutuamente y ambos tienen "ambas", los tratamos como
+  // una unidad: los metemos juntos antes de procesar al resto individualmente.
   const ambosOrdenados = [...ambos].sort((a, b) => {
     const da = historialDescartes[a.empleadoId] || 0;
     const db = historialDescartes[b.empleadoId] || 0;
     return da - db;
   });
 
+  const yaAsignadosPorPar = new Set(); // uids procesados como parte de un par
+
   for (const emp of ambosOrdenados) {
-    const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
-    const enQ1Esp = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
-    const enQ2Esp = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+    if (yaAsignadosPorPar.has(emp.empleadoId)) continue;
+    const prefId = emp.companeroPreferidoId;
+    // ¿tiene compañero preferido mutuo que también está en "ambas"?
+    const empB = prefId ? ambos.find(e => e.empleadoId === prefId && e.companeroPreferidoId === emp.empleadoId) : null;
 
-    // Criterio principal: balance TOTAL entre quincenas (no solo por especialidad)
-    // Criterio secundario: balance por especialidad como desempate
-    let preferirQ1;
-    if (asignadosQ1.length !== asignadosQ2.length) {
-      preferirQ1 = asignadosQ1.length < asignadosQ2.length;
-    } else if (enQ1Esp !== enQ2Esp) {
-      preferirQ1 = enQ1Esp < enQ2Esp;
+    if (empB && !yaAsignadosPorPar.has(empB.empleadoId)) {
+      // Par mutuo dentro de "ambas": meterlos juntos a la quincena con menos gente
+      const preferirQ1 = asignadosQ1.length <= asignadosQ2.length;
+      if (preferirQ1 && asignadosQ1.length + 2 <= MAX_POR_QUINCENA) {
+        asignadosQ1.push({ ...emp, preferencia: "q1" });
+        asignadosQ1.push({ ...empB, preferencia: "q1" });
+      } else if (!preferirQ1 && asignadosQ2.length + 2 <= MAX_POR_QUINCENA) {
+        asignadosQ2.push({ ...emp, preferencia: "q2" });
+        asignadosQ2.push({ ...empB, preferencia: "q2" });
+      } else if (asignadosQ1.length + 2 <= MAX_POR_QUINCENA) {
+        asignadosQ1.push({ ...emp, preferencia: "q1" });
+        asignadosQ1.push({ ...empB, preferencia: "q1" });
+      } else {
+        asignadosQ2.push({ ...emp, preferencia: "q2" });
+        asignadosQ2.push({ ...empB, preferencia: "q2" });
+      }
+      yaAsignadosPorPar.add(emp.empleadoId);
+      yaAsignadosPorPar.add(empB.empleadoId);
     } else {
-      preferirQ1 = true;
-    }
-
-    if (preferirQ1) {
-      asignadosQ1.push({ ...emp, preferencia: "q1" });
-    } else {
-      asignadosQ2.push({ ...emp, preferencia: "q2" });
+      // Sin par mutuo en "ambas": balance normal
+      const esp = mapaEspecialidades[emp.empleadoId] || "SIN_ESP";
+      const enQ1Esp = asignadosQ1.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+      const enQ2Esp = asignadosQ2.filter(e => (mapaEspecialidades[e.empleadoId] || "SIN_ESP") === esp).length;
+      let preferirQ1;
+      if (asignadosQ1.length !== asignadosQ2.length) {
+        preferirQ1 = asignadosQ1.length < asignadosQ2.length;
+      } else if (enQ1Esp !== enQ2Esp) {
+        preferirQ1 = enQ1Esp < enQ2Esp;
+      } else {
+        preferirQ1 = true;
+      }
+      if (preferirQ1) {
+        asignadosQ1.push({ ...emp, preferencia: "q1" });
+      } else {
+        asignadosQ2.push({ ...emp, preferencia: "q2" });
+      }
     }
   }
 
-  // Compañero preferido: si dos personas se eligieron mutuamente,
-  // intentamos moverlas a la misma quincena sin superar MAX_POR_QUINCENA.
-  const todosAsignados = [...asignadosQ1, ...asignadosQ2];
+  // ── PASO 2: corregir pares entre quincenas fijas (q1/q2) o mixtos ────────────
+  // Casos: A fija en q1, B fija en q2 (o viceversa), o uno fijo y el otro en "ambas"
+  // que ya fue asignado por balance al lado equivocado.
   const paresProcesadas = new Set();
-  for (const emp of todosAsignados) {
+  const todosActuales = () => [...asignadosQ1, ...asignadosQ2]; // función para leer estado actual
+
+  for (const emp of todosActuales()) {
     const idA = emp.empleadoId;
     const prefId = emp.companeroPreferidoId;
-    if (!prefId || paresProcesadas.has(`${idA}-${prefId}`) || paresProcesadas.has(`${prefId}-${idA}`)) continue;
-    const empB = todosAsignados.find(e => e.empleadoId === prefId);
-    if (!empB || empB.companeroPreferidoId !== idA) continue; // no es mutuo
-    paresProcesadas.add(`${idA}-${prefId}`);
+    if (!prefId) continue;
+    const key = [idA, prefId].sort().join("-");
+    if (paresProcesadas.has(key)) continue;
+    const empB = todosActuales().find(e => e.empleadoId === prefId);
+    if (!empB || empB.companeroPreferidoId !== idA) continue; // no mutuo
+    paresProcesadas.add(key);
+
     const enQ1A = asignadosQ1.some(e => e.empleadoId === idA);
     const enQ1B = asignadosQ1.some(e => e.empleadoId === prefId);
-    if (enQ1A === enQ1B) continue; // ya están en la misma quincena
-    // A está en Q1 y B en Q2 (o viceversa) — intentamos mover B a la quincena de A
+    if (enQ1A === enQ1B) continue; // ya juntos
+
+    // Uno en Q1, el otro en Q2. Solo se puede mover el que tiene preferencia "ambas"
+    // (los de q1/q2 fija no se pueden mover sin respetar su elección).
+    const aEsFlexible = !["q1", "q2"].includes(inscriptos.find(i => i.empleadoId === idA)?.preferencia);
+    const bEsFlexible = !["q1", "q2"].includes(inscriptos.find(i => i.empleadoId === prefId)?.preferencia);
+
     if (enQ1A && !enQ1B) {
-      // mover B de Q2 a Q1 si hay espacio
-      if (asignadosQ1.length < MAX_POR_QUINCENA) {
+      // A en Q1, B en Q2 → intentar mover B a Q1 (si B es flexible y hay espacio)
+      if (bEsFlexible && asignadosQ1.length < MAX_POR_QUINCENA) {
         const idx = asignadosQ2.findIndex(e => e.empleadoId === prefId);
-        if (idx !== -1) {
-          asignadosQ2.splice(idx, 1);
-          asignadosQ1.push({ ...empB, preferencia: "q1" });
-        }
-      } else if (asignadosQ2.length < MAX_POR_QUINCENA) {
-        // mover A de Q1 a Q2
+        if (idx !== -1) { asignadosQ2.splice(idx, 1); asignadosQ1.push({ ...empB, preferencia: "q1" }); }
+      } else if (aEsFlexible && asignadosQ2.length < MAX_POR_QUINCENA) {
+        // mover A a Q2 en su lugar
         const idx = asignadosQ1.findIndex(e => e.empleadoId === idA);
-        if (idx !== -1) {
-          asignadosQ1.splice(idx, 1);
-          asignadosQ2.push({ ...emp, preferencia: "q2" });
-        }
+        if (idx !== -1) { asignadosQ1.splice(idx, 1); asignadosQ2.push({ ...emp, preferencia: "q2" }); }
       }
     } else {
-      // B en Q1, A en Q2 — mover A a Q1 si hay espacio
-      if (asignadosQ1.length < MAX_POR_QUINCENA) {
+      // B en Q1, A en Q2 → intentar mover A a Q1
+      if (aEsFlexible && asignadosQ1.length < MAX_POR_QUINCENA) {
         const idx = asignadosQ2.findIndex(e => e.empleadoId === idA);
-        if (idx !== -1) {
-          asignadosQ2.splice(idx, 1);
-          asignadosQ1.push({ ...emp, preferencia: "q1" });
-        }
-      } else if (asignadosQ2.length < MAX_POR_QUINCENA) {
-        // mover B de Q1 a Q2
+        if (idx !== -1) { asignadosQ2.splice(idx, 1); asignadosQ1.push({ ...emp, preferencia: "q1" }); }
+      } else if (bEsFlexible && asignadosQ2.length < MAX_POR_QUINCENA) {
         const idx = asignadosQ1.findIndex(e => e.empleadoId === prefId);
-        if (idx !== -1) {
-          asignadosQ1.splice(idx, 1);
-          asignadosQ2.push({ ...empB, preferencia: "q2" });
-        }
+        if (idx !== -1) { asignadosQ1.splice(idx, 1); asignadosQ2.push({ ...empB, preferencia: "q2" }); }
       }
     }
   }
