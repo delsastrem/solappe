@@ -183,6 +183,18 @@ export function distribuir(seleccionados, anio, mes, quincena, historialAsignaci
   const asignaciones = {};
   seleccionados.forEach(e => { asignaciones[e.empleadoId] = []; });
 
+  // Detectar pares mutuos dentro de este grupo de seleccionados
+  // uid -> uid del compañero si el par es mutuo, sino null
+  const pareja = {};
+  seleccionados.forEach(e => {
+    const prefId = e.companeroPreferidoId;
+    if (!prefId) return;
+    const otro = seleccionados.find(x => x.empleadoId === prefId);
+    if (otro && otro.companeroPreferidoId === e.empleadoId) {
+      pareja[e.empleadoId] = prefId;
+    }
+  });
+
   const diasPorTurno = { mañana: [], noche: [], tarde: [] };
   dias.forEach(d => {
     if (diasPorTurno[d.turno]) diasPorTurno[d.turno].push(d);
@@ -202,12 +214,39 @@ export function distribuir(seleccionados, anio, mes, quincena, historialAsignaci
         const turnoB = asignaciones[b.empleadoId].filter(x => x.turno === turno).length;
         if (turnoA !== turnoB) return turnoA - turnoB;
 
-        // 3er criterio (nuevo): menos días acumulados históricamente
+        // 3er criterio: menos días acumulados históricamente
         const histA = historialAsignaciones[a.empleadoId] || 0;
         const histB = historialAsignaciones[b.empleadoId] || 0;
         return histA - histB;
       });
-      ordenados.slice(0, req).forEach(e => {
+
+      // Seleccionar los `req` primeros, pero respetando pares:
+      // si entra uno del par, intentar meter también al compañero
+      const seleccionadosDia = [];
+      const yaIncluido = new Set();
+
+      for (const emp of ordenados) {
+        if (yaIncluido.has(emp.empleadoId)) continue;
+        if (seleccionadosDia.length >= req) break;
+
+        const compId = pareja[emp.empleadoId];
+        if (compId && !yaIncluido.has(compId) && seleccionadosDia.length + 1 < req) {
+          // Hay lugar para los dos: meterlos juntos
+          seleccionadosDia.push(emp);
+          yaIncluido.add(emp.empleadoId);
+          const compObj = seleccionados.find(x => x.empleadoId === compId);
+          if (compObj) {
+            seleccionadosDia.push(compObj);
+            yaIncluido.add(compId);
+          }
+        } else {
+          // Sin par o no hay lugar para el par completo: entrada individual
+          seleccionadosDia.push(emp);
+          yaIncluido.add(emp.empleadoId);
+        }
+      }
+
+      seleccionadosDia.forEach(e => {
         asignaciones[e.empleadoId].push({
           fecha: dia.fecha.toISOString(),
           turno,
